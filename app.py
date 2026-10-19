@@ -167,12 +167,12 @@ class Handler(BaseHTTPRequestHandler):
                     "hint": "Use up to five ticker symbols containing only letters, digits, dot, dash, or underscore.",
                 }, head_only)
 
-            def fetch_rate(symbol):
+            def find_instrument_id(symbol):
                 search_status, search_result = etoro_get(
                     "market-data/search?" + urlencode({"internalSymbolFull": symbol})
                 )
                 if search_status != 200 or not search_result.get("ok"):
-                    return {"ok": False, "symbol": symbol, "stage": "search", "error": search_result.get("error", "search_failed"), "upstream_status": search_status}
+                    return None, {"ok": False, "symbol": symbol, "stage": "search", "error": search_result.get("error", "search_failed"), "upstream_status": search_status}
 
                 records = []
                 def collect_records(value):
@@ -187,28 +187,68 @@ class Handler(BaseHTTPRequestHandler):
                                 collect_records(nested)
                 collect_records(search_result.get("data"))
 
-                instrument_id = None
                 for record in records:
                     record_symbol = str(record.get("internalSymbolFull") or record.get("InternalSymbolFull") or record.get("symbol") or record.get("Symbol") or "").strip().upper()
                     candidate_id = record.get("instrumentId", record.get("InstrumentId", record.get("instrumentID")))
                     if record_symbol == symbol and candidate_id is not None:
                         try:
-                            instrument_id = int(candidate_id)
+                            return int(candidate_id), None
                         except (TypeError, ValueError):
                             continue
-                        break
-                if instrument_id is None:
-                    return {"ok": False, "symbol": symbol, "error": "instrument_not_found"}
+                return None, {"ok": False, "symbol": symbol, "error": "instrument_not_found"}
 
+            resolved = []
+            results_by_symbol = {}
+            for symbol in symbols:
+                instrument_id, error = find_instrument_id(symbol)
+                if error:
+                    results_by_symbol[symbol] = error
+                else:
+                    resolved.append({"symbol": symbol, "instrument_id": instrument_id})
+
+            if resolved:
+                # eToro supports fetching multiple instrument IDs in one rates snapshot.
+                ids = ",".join(str(item["instrument_id"]) for item in resolved)
                 rates_status, rates_result = etoro_get(
-                    "market-data/instruments/rates?" + urlencode({"instrumentIds": str(instrument_id)})
+                    "market-data/instruments/rates?" + urlencode({"instrumentIds": ids})
                 )
                 if rates_status != 200 or not rates_result.get("ok"):
-                    return {"ok": False, "symbol": symbol, "instrument_id": instrument_id, "stage": "rates", "error": rates_result.get("error", "rates_failed"), "upstream_status": rates_status}
-                rates = rates_result.get("data")
-                freshness = quote_freshness(rates)
-                return {"ok": True, "symbol": symbol, "instrument_id": instrument_id, "rates": rates, **freshness}
+                    for item in resolved:
+                        results_by_symbol[item["symbol"]] = {
+                            "ok": False, "symbol": item["symbol"], "instrument_id": item["instrument_id"],
+                            "stage": "rates_batch", "error": rates_result.get("error", "rates_failed"),
+                            "upstream_status": rates_status,
+                        }
+                else:
+                    rates_payload = rates_result.get("data")
+                    rate_rows = rates_payload.get("rates") if isinstance(rates_payload, dict) else None
+                    if not isinstance(rate_rows, list):
+                        rate_rows = []
+                    rates_by_id = {}
+                    for row in rate_rows:
+                        if isinstance(row, dict):
+                            raw_id = row.get("instrumentID", row.get("instrumentId", row.get("InstrumentId")))
+                            try:
+                                rates_by_id[int(raw_id)] = row
+                            except (TypeError, ValueError):
+                                continue
 
+                    for item in resolved:
+                        row = rates_by_id.get(item["instrument_id"])
+                        if row is None:
+                            results_by_symbol[item["symbol"]] = {
+                                "ok": False, "symbol": item["symbol"], "instrument_id": item["instrument_id"],
+                                "stage": "rates_batch", "error": "rate_not_returned_for_instrument",
+                            }
+                            continue
+                        single_rate_payload = {"rates": [row]}
+                        freshness = quote_freshness(single_rate_payload)
+                        results_by_symbol[item["symbol"]] = {
+                            "ok": True, "symbol": item["symbol"], "instrument_id": item["instrument_id"],
+                            "rates": single_rate_payload, **freshness,
+                        }
+
+            results = [results_by_symbol[symbol] for symbol in symbols]
             results = [fetch_rate(symbol) for symbol in symbols]
             if len(results) == 1:
                 result = results[0]
