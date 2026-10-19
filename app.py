@@ -1,5 +1,8 @@
 """Tradeboot HTTP API. eToro is the only supported broker integration."""
-from fastapi import FastAPI, HTTPException, Query
+import hmac
+import os
+
+from fastapi import Depends, FastAPI, HTTPException, Query, Header
 from etoro_client import EtoroClient, EtoroError
 
 app = FastAPI(title="Tradeboot", version="0.1.0", description="Tradeboot connected to eToro only")
@@ -7,6 +10,18 @@ app = FastAPI(title="Tradeboot", version="0.1.0", description="Tradeboot connect
 
 def client() -> EtoroClient:
     return EtoroClient()
+
+
+def require_access_token(authorization: str | None = Header(default=None)) -> None:
+    """Protect account-data endpoints on a publicly reachable deployment."""
+    expected = os.getenv("TRADEBOOT_ACCESS_TOKEN", "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="Tradeboot access token is not configured.")
+    supplied = authorization or ""
+    if not supplied.startswith("Bearer ") or not hmac.compare_digest(
+        supplied.removeprefix("Bearer ").strip(), expected
+    ):
+        raise HTTPException(status_code=401, detail="Unauthorized.")
 
 
 @app.get("/health")
@@ -29,7 +44,7 @@ def status() -> dict:
 
 
 @app.get("/api/etoro/connection")
-def connection() -> dict:
+def connection(_: None = Depends(require_access_token)) -> dict:
     etoro = client()
     if not etoro.configured:
         raise HTTPException(status_code=503, detail="eToro credentials are not configured.")
@@ -40,18 +55,19 @@ def connection() -> dict:
 
 
 @app.get("/api/etoro/watchlist")
-def watchlist() -> dict:
+def watchlist(_: None = Depends(require_access_token)) -> dict:
     etoro = client()
+    if not etoro.configured:
+        raise HTTPException(status_code=503, detail="eToro credentials are not configured.")
     try:
         return {"provider": "eToro", "items": etoro.get_watchlist()}
     except EtoroError as exc:
         raise HTTPException(status_code=exc.status_code or 502, detail=str(exc)) from None
 
 
-@app.get("/api/etoro/portfolio")
+@app.get("/api/etoro/portfolio", dependencies=[Depends(require_access_token)])
 def portfolio(environment: str | None = Query(default=None, pattern="^(demo|real)$")) -> dict:
-    # Read-only portfolio retrieval. Trading/order endpoints are deliberately absent
-    # until authentication, demo behavior, and risk controls are verified.
+    # Read-only portfolio retrieval. Trading/order endpoints are deliberately absent.
     etoro = client()
     if environment:
         etoro.environment = environment
