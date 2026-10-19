@@ -9,6 +9,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
 
 from tradeboot import Tradeboot
 
@@ -66,9 +67,11 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _dispatch(self, head_only=False):
-        if self.path == "/health":
+        # Ignore query parameters such as tracking tags added by browsers or link previews.
+        path = urlsplit(self.path).path
+        if path == "/health":
             return self._json(200, {"ok": True, "service": "Tradeboot"}, head_only)
-        if self.path == "/":
+        if path == "/":
             return self._json(200, {
                 "service": "Tradeboot",
                 "status": "standby",
@@ -79,12 +82,12 @@ class Handler(BaseHTTPRequestHandler):
                 "trading_enabled": False,
                 "etoro_mode": "demo_read_only",
             }, head_only)
-        if self.path in ("/status", "/watchlist"):
+        if path in ("/status", "/watchlist"):
             return self._json(200, module.snapshot(), head_only)
-        if self.path == "/etoro/watchlist":
+        if path == "/etoro/watchlist":
             status, payload = etoro_get("watchlists/default-watchlists/items")
             return self._json(status, payload, head_only)
-        if self.path == "/etoro/demo/portfolio":
+        if path == "/etoro/demo/portfolio":
             status, payload = etoro_get("trading/info/demo/portfolio")
             return self._json(status, payload, head_only)
         return self._json(404, {"error": "not_found"}, head_only)
