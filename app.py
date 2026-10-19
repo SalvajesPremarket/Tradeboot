@@ -9,7 +9,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from tradeboot import Tradeboot
 
@@ -29,7 +29,7 @@ def etoro_get(path):
             "required_env": ["ETORO_API_KEY", "ETORO_USER_KEY"],
         }
 
-    # Paths are fixed by this module; callers cannot supply arbitrary URLs.
+    # Endpoint paths are fixed by this module; query values are validated and encoded.
     request = Request(
         ETORO_BASE_URL + path,
         headers={
@@ -96,12 +96,26 @@ class Handler(BaseHTTPRequestHandler):
                 "endpoints": [
                     "/health", "/status", "/watchlist",
                     "/etoro/watchlist", "/etoro/demo/portfolio",
+                    "/etoro/instrument-search?symbol=AAPL",
                 ],
                 "trading_enabled": False,
                 "etoro_mode": "demo_read_only",
             }, head_only)
         if path in ("/status", "/watchlist"):
             return self._json(200, module.snapshot(), head_only)
+        if path == "/etoro/instrument-search":
+            query = parse_qs(urlsplit(self.path).query)
+            symbol = query.get("symbol", ["AAPL"])[0].strip().upper()
+            allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_"
+            if not symbol or len(symbol) > 20 or any(char not in allowed for char in symbol):
+                return self._json(400, {
+                    "ok": False,
+                    "error": "invalid_symbol",
+                    "hint": "Use a ticker containing only letters, digits, dot, dash, or underscore.",
+                }, head_only)
+            api_path = "market-data/search?" + urlencode({"internalSymbolFull": symbol})
+            status, payload = etoro_get(api_path)
+            return self._json(status, payload, head_only)
         if path == "/etoro/watchlist":
             # Use the documented quick-start endpoint for listing default watchlist items.
             status, payload = etoro_get("watchlists/default-watchlists/items")
