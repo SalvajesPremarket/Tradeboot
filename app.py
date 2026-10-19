@@ -329,7 +329,16 @@ class Handler(BaseHTTPRequestHandler):
                         auth_deadline = time.monotonic() + 5
                         authenticated = False
                         while time.monotonic() < auth_deadline:
-                            incoming = json.loads(stream.recv())
+                            raw_message = stream.recv()
+                            if not raw_message:
+                                continue
+                            try:
+                                incoming = json.loads(raw_message)
+                            except (json.JSONDecodeError, TypeError):
+                                # Ignore empty/non-JSON control frames and keep waiting for the acknowledgement.
+                                continue
+                            if not isinstance(incoming, dict):
+                                continue
                             if incoming.get("operation") == "Authenticate" and incoming.get("id") == auth_id:
                                 if not incoming.get("success"):
                                     raise RuntimeError("websocket_authentication_failed")
@@ -350,9 +359,16 @@ class Handler(BaseHTTPRequestHandler):
                         deadline = time.monotonic() + 8
                         while time.monotonic() < deadline and len(rows_by_id) < len(resolved):
                             try:
-                                incoming = json.loads(stream.recv())
+                                raw_message = stream.recv()
                             except websocket.WebSocketTimeoutException:
                                 break
+                            if not raw_message:
+                                continue
+                            try:
+                                incoming = json.loads(raw_message)
+                            except (json.JSONDecodeError, TypeError):
+                                # Ignore non-JSON frames; the snapshot may arrive in a later message.
+                                continue
                             messages = incoming.get("messages", []) if isinstance(incoming, dict) else []
                             if isinstance(incoming, dict) and incoming.get("topic"):
                                 messages = [incoming]
