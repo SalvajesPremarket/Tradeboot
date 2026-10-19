@@ -97,12 +97,68 @@ class Handler(BaseHTTPRequestHandler):
                     "/health", "/status", "/watchlist",
                     "/etoro/watchlist", "/etoro/demo/portfolio",
                     "/etoro/instrument-search?symbol=AAPL",
+                    "/etoro/instrument-rates?symbol=AAPL",
                 ],
                 "trading_enabled": False,
                 "etoro_mode": "demo_read_only",
             }, head_only)
         if path in ("/status", "/watchlist"):
             return self._json(200, module.snapshot(), head_only)
+        if path == "/etoro/instrument-rates":
+            query = parse_qs(urlsplit(self.path).query)
+            symbol = query.get("symbol", ["AAPL"])[0].strip().upper()
+            allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_"
+            if not symbol or len(symbol) > 20 or any(char not in allowed for char in symbol):
+                return self._json(400, {
+                    "ok": False,
+                    "error": "invalid_symbol",
+                    "hint": "Use a ticker containing only letters, digits, dot, dash, or underscore.",
+                }, head_only)
+
+            search_status, search_result = etoro_get(
+                "market-data/search?" + urlencode({"internalSymbolFull": symbol})
+            )
+            if search_status != 200 or not search_result.get("ok"):
+                return self._json(search_status, search_result, head_only)
+
+            upstream = search_result.get("data")
+            records = upstream.get("data", []) if isinstance(upstream, dict) else []
+            if isinstance(records, dict):
+                records = [records]
+            if not isinstance(records, list):
+                records = []
+
+            instrument_id = None
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                record_symbol = str(
+                    record.get("internalSymbolFull") or record.get("symbol") or ""
+                ).upper()
+                candidate_id = record.get("instrumentId", record.get("InstrumentId"))
+                if record_symbol == symbol and isinstance(candidate_id, int):
+                    instrument_id = candidate_id
+                    break
+
+            if instrument_id is None:
+                return self._json(404, {
+                    "ok": False,
+                    "error": "instrument_not_found",
+                    "symbol": symbol,
+                    "hint": "Search returned no exact symbol match with an instrument ID.",
+                }, head_only)
+
+            rates_status, rates_result = etoro_get(
+                "market-data/instruments/rates?" + urlencode({"instrumentIds": str(instrument_id)})
+            )
+            if rates_status != 200 or not rates_result.get("ok"):
+                return self._json(rates_status, rates_result, head_only)
+            return self._json(200, {
+                "ok": True,
+                "symbol": symbol,
+                "instrument_id": instrument_id,
+                "rates": rates_result.get("data"),
+            }, head_only)
         if path == "/etoro/instrument-search":
             query = parse_qs(urlsplit(self.path).query)
             symbol = query.get("symbol", ["AAPL"])[0].strip().upper()
