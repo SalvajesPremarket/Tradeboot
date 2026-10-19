@@ -249,7 +249,6 @@ class Handler(BaseHTTPRequestHandler):
                         }
 
             results = [results_by_symbol[symbol] for symbol in symbols]
-            results = [fetch_rate(symbol) for symbol in symbols]
             if len(results) == 1:
                 result = results[0]
                 return self._json(200 if result.get("ok") else 502, result, head_only)
