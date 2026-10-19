@@ -1,1 +1,2 @@
-# Tradeboot currently uses only the Python standard library.
+# Tradeboot uses the standard library plus a WebSocket client for eToro's read-only market-data stream.
+websocket-client==1.9.0
