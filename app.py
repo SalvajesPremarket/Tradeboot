@@ -260,6 +260,152 @@ class Handler(BaseHTTPRequestHandler):
                 "max_quote_age_seconds": results[0].get("max_quote_age_seconds", DEFAULT_MAX_QUOTE_AGE_SECONDS),
                 "results": results,
             }, head_only)
+        if path == "/etoro/instrument-stream":
+            # Read-only diagnostic using eToro's documented WebSocket snapshot topics.
+            query = parse_qs(urlsplit(self.path).query)
+            symbols_raw = query.get("symbols", [""])[0]
+            symbols = [item.strip().upper() for item in symbols_raw.split(",") if item.strip()]
+            allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_"
+            if not symbols or len(symbols) > 5 or any(not symbol or len(symbol) > 20 or any(char not in allowed for char in symbol) for symbol in symbols):
+                return self._json(400, {
+                    "ok": False,
+                    "error": "invalid_symbols",
+                    "hint": "Use up to five ticker symbols containing only letters, digits, dot, dash, or underscore.",
+                }, head_only)
+
+            api_key = os.environ.get("ETORO_API_KEY")
+            user_key = os.environ.get("ETORO_USER_KEY")
+            if not api_key or not user_key:
+                return self._json(503, {"ok": False, "error": "etoro_credentials_not_configured"}, head_only)
+
+            resolved = []
+            errors = {}
+            for symbol in symbols:
+                search_status, search_result = etoro_get(
+                    "market-data/search?" + urlencode({"internalSymbolFull": symbol})
+                )
+                if search_status != 200 or not search_result.get("ok"):
+                    errors[symbol] = {"ok": False, "symbol": symbol, "stage": "search", "error": "instrument_search_failed", "upstream_status": search_status}
+                    continue
+                records = []
+                def collect_stream_records(value):
+                    if isinstance(value, dict):
+                        records.append(value)
+                        for nested in value.values():
+                            if isinstance(nested, (dict, list)):
+                                collect_stream_records(nested)
+                    elif isinstance(value, list):
+                        for nested in value:
+                            if isinstance(nested, (dict, list)):
+                                collect_stream_records(nested)
+                collect_stream_records(search_result.get("data"))
+                found_id = None
+                for record in records:
+                    record_symbol = str(record.get("internalSymbolFull") or record.get("InternalSymbolFull") or record.get("symbol") or record.get("Symbol") or "").strip().upper()
+                    candidate_id = record.get("instrumentId", record.get("InstrumentId", record.get("instrumentID")))
+                    if record_symbol == symbol and candidate_id is not None:
+                        try:
+                            found_id = int(candidate_id)
+                            break
+                        except (TypeError, ValueError):
+                            pass
+                if found_id is None:
+                    errors[symbol] = {"ok": False, "symbol": symbol, "stage": "search", "error": "instrument_not_found"}
+                else:
+                    resolved.append({"symbol": symbol, "instrument_id": found_id})
+
+            if resolved:
+                try:
+                    import time
+                    import websocket
+                    stream = websocket.create_connection("wss://ws.etoro.com/ws", timeout=5)
+                    try:
+                        auth_id = str(uuid.uuid4())
+                        stream.send(json.dumps({
+                            "id": auth_id,
+                            "operation": "Authenticate",
+                            "data": {"userKey": user_key, "apiKey": api_key},
+                        }))
+                        auth_deadline = time.monotonic() + 5
+                        authenticated = False
+                        while time.monotonic() < auth_deadline:
+                            incoming = json.loads(stream.recv())
+                            if incoming.get("operation") == "Authenticate" and incoming.get("id") == auth_id:
+                                if not incoming.get("success"):
+                                    raise RuntimeError("websocket_authentication_failed")
+                                authenticated = True
+                                break
+                        if not authenticated:
+                            raise RuntimeError("websocket_authentication_timeout")
+
+                        stream.send(json.dumps({
+                            "id": str(uuid.uuid4()),
+                            "operation": "Subscribe",
+                            "data": {
+                                "topics": ["instrument:" + str(item["instrument_id"]) for item in resolved],
+                                "snapshot": True,
+                            },
+                        }))
+                        rows_by_id = {}
+                        deadline = time.monotonic() + 8
+                        while time.monotonic() < deadline and len(rows_by_id) < len(resolved):
+                            try:
+                                incoming = json.loads(stream.recv())
+                            except websocket.WebSocketTimeoutException:
+                                break
+                            messages = incoming.get("messages", []) if isinstance(incoming, dict) else []
+                            if isinstance(incoming, dict) and incoming.get("topic"):
+                                messages = [incoming]
+                            for message in messages:
+                                if not isinstance(message, dict):
+                                    continue
+                                topic = str(message.get("topic", ""))
+                                try:
+                                    instrument_id = int(topic.rsplit(":", 1)[1])
+                                except (IndexError, ValueError):
+                                    continue
+                                content = message.get("content")
+                                if isinstance(content, str):
+                                    try:
+                                        content = json.loads(content)
+                                    except ValueError:
+                                        continue
+                                if isinstance(content, dict):
+                                    rows_by_id[instrument_id] = content
+                        for item in resolved:
+                            row = rows_by_id.get(item["instrument_id"])
+                            if row is None:
+                                errors[item["symbol"]] = {
+                                    "ok": False, "symbol": item["symbol"], "instrument_id": item["instrument_id"],
+                                    "stage": "websocket_snapshot", "error": "stream_snapshot_not_returned",
+                                }
+                                continue
+                            freshness = quote_freshness({"rates": [row]})
+                            errors[item["symbol"]] = {
+                                "ok": True, "symbol": item["symbol"], "instrument_id": item["instrument_id"],
+                                "source": "etoro_websocket_snapshot", "rates": {"rates": [row]}, **freshness,
+                            }
+                    finally:
+                        stream.close()
+                except Exception as exc:
+                    # Keep secrets and provider payloads out of the response.
+                    return self._json(502, {
+                        "ok": False,
+                        "error": "etoro_websocket_diagnostic_failed",
+                        "diagnostic": type(exc).__name__,
+                        "hint": "The WebSocket snapshot could not be read; retry during market hours.",
+                    }, head_only)
+
+            results = [errors.get(symbol, {"ok": False, "symbol": symbol, "error": "no_result"}) for symbol in symbols]
+            all_ok = all(result.get("ok") for result in results)
+            all_fresh = all(result.get("ok") and result.get("quote_is_fresh") for result in results)
+            return self._json(200 if all_ok else 207, {
+                "ok": all_ok,
+                "source": "etoro_websocket_snapshot",
+                "all_quotes_fresh": all_fresh,
+                "max_quote_age_seconds": DEFAULT_MAX_QUOTE_AGE_SECONDS,
+                "results": results,
+            }, head_only)
         if path == "/etoro/instrument-search":
             query = parse_qs(urlsplit(self.path).query)
             symbol = query.get("symbol", ["AAPL"])[0].strip().upper()
