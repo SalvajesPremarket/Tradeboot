@@ -6,6 +6,7 @@ variables. No order placement or account-changing requests are implemented.
 import json
 import os
 import uuid
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -17,6 +18,53 @@ from tradeboot import Tradeboot
 module = Tradeboot()
 ETORO_BASE_URL = "https://public-api.etoro.com/api/v1/"
 ETORO_TIMEOUT_SECONDS = 15
+DEFAULT_MAX_QUOTE_AGE_SECONDS = 300
+
+
+def quote_freshness(rates_payload):
+    """Annotate a rate snapshot with its age; this is not a streaming guarantee."""
+    try:
+        max_age = int(os.environ.get("ETORO_MAX_QUOTE_AGE_SECONDS", str(DEFAULT_MAX_QUOTE_AGE_SECONDS)))
+        if max_age < 1:
+            max_age = DEFAULT_MAX_QUOTE_AGE_SECONDS
+    except (TypeError, ValueError):
+        max_age = DEFAULT_MAX_QUOTE_AGE_SECONDS
+
+    rate_rows = rates_payload.get("rates") if isinstance(rates_payload, dict) else None
+    if isinstance(rate_rows, dict):
+        rate_rows = rate_rows.get("rates")
+    if not isinstance(rate_rows, list) or not rate_rows or not isinstance(rate_rows[0], dict):
+        return {
+            "quote_time": None,
+            "quote_age_seconds": None,
+            "quote_is_fresh": False,
+            "freshness_status": "unknown_timestamp",
+            "max_quote_age_seconds": max_age,
+        }
+
+    quote_time = rate_rows[0].get("date") or rate_rows[0].get("Date")
+    try:
+        parsed_time = datetime.fromisoformat(str(quote_time).replace("Z", "+00:00"))
+        if parsed_time.tzinfo is None:
+            parsed_time = parsed_time.replace(tzinfo=timezone.utc)
+        age = max(0, int((datetime.now(timezone.utc) - parsed_time.astimezone(timezone.utc)).total_seconds()))
+    except (TypeError, ValueError, OverflowError):
+        return {
+            "quote_time": quote_time,
+            "quote_age_seconds": None,
+            "quote_is_fresh": False,
+            "freshness_status": "invalid_timestamp",
+            "max_quote_age_seconds": max_age,
+        }
+
+    fresh = age <= max_age
+    return {
+        "quote_time": quote_time,
+        "quote_age_seconds": age,
+        "quote_is_fresh": fresh,
+        "freshness_status": "fresh" if fresh else "stale",
+        "max_quote_age_seconds": max_age,
+    }
 
 
 def etoro_get(path):
@@ -157,14 +205,22 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 if rates_status != 200 or not rates_result.get("ok"):
                     return {"ok": False, "symbol": symbol, "instrument_id": instrument_id, "stage": "rates", "error": rates_result.get("error", "rates_failed"), "upstream_status": rates_status}
-                return {"ok": True, "symbol": symbol, "instrument_id": instrument_id, "rates": rates_result.get("data")}
+                rates = rates_result.get("data")
+                freshness = quote_freshness(rates)
+                return {"ok": True, "symbol": symbol, "instrument_id": instrument_id, "rates": rates, **freshness}
 
             results = [fetch_rate(symbol) for symbol in symbols]
             if len(results) == 1:
                 result = results[0]
                 return self._json(200 if result.get("ok") else 502, result, head_only)
             all_ok = all(result.get("ok") for result in results)
-            return self._json(200 if all_ok else 207, {"ok": all_ok, "results": results}, head_only)
+            all_fresh = all(result.get("ok") and result.get("quote_is_fresh") for result in results)
+            return self._json(200 if all_ok else 207, {
+                "ok": all_ok,
+                "all_quotes_fresh": all_fresh,
+                "max_quote_age_seconds": results[0].get("max_quote_age_seconds", DEFAULT_MAX_QUOTE_AGE_SECONDS),
+                "results": results,
+            }, head_only)
         if path == "/etoro/instrument-search":
             query = parse_qs(urlsplit(self.path).query)
             symbol = query.get("symbol", ["AAPL"])[0].strip().upper()
