@@ -45,11 +45,28 @@ def etoro_get(path):
             payload = json.loads(response.read().decode("utf-8"))
             return response.status, {"ok": True, "data": payload}
     except HTTPError as exc:
-        # Do not forward upstream bodies or credential-related diagnostics.
+        # Expose only a small, sanitized diagnostic; never forward the full upstream body.
+        diagnostic = {}
+        try:
+            raw = exc.read(4096).decode("utf-8", errors="replace")
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                for field in ("code", "error", "message", "detail"):
+                    value = parsed.get(field)
+                    if isinstance(value, (str, int, float)):
+                        safe_value = str(value)[:240]
+                        # Avoid returning anything that resembles a long credential/token.
+                        import re
+                        safe_value = re.sub(r"(?i)(key|token|secret|authorization)\\s*[:=]\\s*[^,;\\s]+", r"\\1=[REDACTED]", safe_value)
+                        safe_value = re.sub(r"\\b[A-Za-z0-9_-]{40,}\\b", "[REDACTED]", safe_value)
+                        diagnostic[field] = safe_value
+        except (ValueError, UnicodeError):
+            pass
         return 502, {
             "ok": False,
             "error": "etoro_api_error",
             "upstream_status": exc.code,
+            "upstream_diagnostic": diagnostic,
         }
     except (URLError, TimeoutError, OSError, ValueError):
         return 502, {"ok": False, "error": "etoro_api_unavailable"}
@@ -85,7 +102,8 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/status", "/watchlist"):
             return self._json(200, module.snapshot(), head_only)
         if path == "/etoro/watchlist":
-            status, payload = etoro_get("watchlists/default-watchlists/items")
+            # The official API quick-start uses GET /watchlists as the basic read test.
+            status, payload = etoro_get("watchlists")
             return self._json(status, payload, head_only)
         if path == "/etoro/demo/portfolio":
             status, payload = etoro_get("trading/info/demo/portfolio")
