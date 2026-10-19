@@ -121,23 +121,42 @@ class Handler(BaseHTTPRequestHandler):
             if search_status != 200 or not search_result.get("ok"):
                 return self._json(search_status, search_result, head_only)
 
+            # Search responses can wrap instrument records at different nesting levels.
+            # Walk the payload recursively rather than assuming a single "data" list.
             upstream = search_result.get("data")
-            records = upstream.get("data", []) if isinstance(upstream, dict) else []
-            if isinstance(records, dict):
-                records = [records]
-            if not isinstance(records, list):
-                records = []
+            records = []
+
+            def collect_records(value):
+                if isinstance(value, dict):
+                    records.append(value)
+                    for nested in value.values():
+                        if isinstance(nested, (dict, list)):
+                            collect_records(nested)
+                elif isinstance(value, list):
+                    for nested in value:
+                        if isinstance(nested, (dict, list)):
+                            collect_records(nested)
+
+            collect_records(upstream)
 
             instrument_id = None
             for record in records:
-                if not isinstance(record, dict):
-                    continue
                 record_symbol = str(
-                    record.get("internalSymbolFull") or record.get("symbol") or ""
-                ).upper()
-                candidate_id = record.get("instrumentId", record.get("InstrumentId"))
-                if record_symbol == symbol and isinstance(candidate_id, int):
-                    instrument_id = candidate_id
+                    record.get("internalSymbolFull")
+                    or record.get("InternalSymbolFull")
+                    or record.get("symbol")
+                    or record.get("Symbol")
+                    or ""
+                ).strip().upper()
+                candidate_id = record.get(
+                    "instrumentId",
+                    record.get("InstrumentId", record.get("instrumentID"))
+                )
+                if record_symbol == symbol and candidate_id is not None:
+                    try:
+                        instrument_id = int(candidate_id)
+                    except (TypeError, ValueError):
+                        continue
                     break
 
             if instrument_id is None:
