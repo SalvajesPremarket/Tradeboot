@@ -37,6 +37,7 @@ def etoro_get(path):
             "x-user-key": user_key,
             "x-request-id": str(uuid.uuid4()),
             "Accept": "application/json",
+            "User-Agent": "Tradeboot/1.0 (read-only eToro API client)",
         },
         method="GET",
     )
@@ -102,8 +103,8 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/status", "/watchlist"):
             return self._json(200, module.snapshot(), head_only)
         if path == "/etoro/watchlist":
-            # The official API quick-start uses GET /watchlists as the basic read test.
-            status, payload = etoro_get("watchlists")
+            # Use the documented quick-start endpoint for listing default watchlist items.
+            status, payload = etoro_get("watchlists/default-watchlists/items")
             return self._json(status, payload, head_only)
         if path == "/etoro/demo/portfolio":
             status, payload = etoro_get("trading/info/demo/portfolio")
