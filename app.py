@@ -106,78 +106,65 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, module.snapshot(), head_only)
         if path == "/etoro/instrument-rates":
             query = parse_qs(urlsplit(self.path).query)
-            symbol = query.get("symbol", ["AAPL"])[0].strip().upper()
+            symbols_raw = query.get("symbols", [""])[0]
+            if symbols_raw:
+                symbols = [item.strip().upper() for item in symbols_raw.split(",") if item.strip()]
+            else:
+                symbols = [query.get("symbol", ["AAPL"])[0].strip().upper()]
             allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_"
-            if not symbol or len(symbol) > 20 or any(char not in allowed for char in symbol):
+            if not symbols or len(symbols) > 5 or any(not symbol or len(symbol) > 20 or any(char not in allowed for char in symbol) for symbol in symbols):
                 return self._json(400, {
                     "ok": False,
-                    "error": "invalid_symbol",
-                    "hint": "Use a ticker containing only letters, digits, dot, dash, or underscore.",
+                    "error": "invalid_symbols",
+                    "hint": "Use up to five ticker symbols containing only letters, digits, dot, dash, or underscore.",
                 }, head_only)
 
-            search_status, search_result = etoro_get(
-                "market-data/search?" + urlencode({"internalSymbolFull": symbol})
-            )
-            if search_status != 200 or not search_result.get("ok"):
-                return self._json(search_status, search_result, head_only)
-
-            # Search responses can wrap instrument records at different nesting levels.
-            # Walk the payload recursively rather than assuming a single "data" list.
-            upstream = search_result.get("data")
-            records = []
-
-            def collect_records(value):
-                if isinstance(value, dict):
-                    records.append(value)
-                    for nested in value.values():
-                        if isinstance(nested, (dict, list)):
-                            collect_records(nested)
-                elif isinstance(value, list):
-                    for nested in value:
-                        if isinstance(nested, (dict, list)):
-                            collect_records(nested)
-
-            collect_records(upstream)
-
-            instrument_id = None
-            for record in records:
-                record_symbol = str(
-                    record.get("internalSymbolFull")
-                    or record.get("InternalSymbolFull")
-                    or record.get("symbol")
-                    or record.get("Symbol")
-                    or ""
-                ).strip().upper()
-                candidate_id = record.get(
-                    "instrumentId",
-                    record.get("InstrumentId", record.get("instrumentID"))
+            def fetch_rate(symbol):
+                search_status, search_result = etoro_get(
+                    "market-data/search?" + urlencode({"internalSymbolFull": symbol})
                 )
-                if record_symbol == symbol and candidate_id is not None:
-                    try:
-                        instrument_id = int(candidate_id)
-                    except (TypeError, ValueError):
-                        continue
-                    break
+                if search_status != 200 or not search_result.get("ok"):
+                    return {"ok": False, "symbol": symbol, "stage": "search", "error": search_result.get("error", "search_failed"), "upstream_status": search_status}
 
-            if instrument_id is None:
-                return self._json(404, {
-                    "ok": False,
-                    "error": "instrument_not_found",
-                    "symbol": symbol,
-                    "hint": "Search returned no exact symbol match with an instrument ID.",
-                }, head_only)
+                records = []
+                def collect_records(value):
+                    if isinstance(value, dict):
+                        records.append(value)
+                        for nested in value.values():
+                            if isinstance(nested, (dict, list)):
+                                collect_records(nested)
+                    elif isinstance(value, list):
+                        for nested in value:
+                            if isinstance(nested, (dict, list)):
+                                collect_records(nested)
+                collect_records(search_result.get("data"))
 
-            rates_status, rates_result = etoro_get(
-                "market-data/instruments/rates?" + urlencode({"instrumentIds": str(instrument_id)})
-            )
-            if rates_status != 200 or not rates_result.get("ok"):
-                return self._json(rates_status, rates_result, head_only)
-            return self._json(200, {
-                "ok": True,
-                "symbol": symbol,
-                "instrument_id": instrument_id,
-                "rates": rates_result.get("data"),
-            }, head_only)
+                instrument_id = None
+                for record in records:
+                    record_symbol = str(record.get("internalSymbolFull") or record.get("InternalSymbolFull") or record.get("symbol") or record.get("Symbol") or "").strip().upper()
+                    candidate_id = record.get("instrumentId", record.get("InstrumentId", record.get("instrumentID")))
+                    if record_symbol == symbol and candidate_id is not None:
+                        try:
+                            instrument_id = int(candidate_id)
+                        except (TypeError, ValueError):
+                            continue
+                        break
+                if instrument_id is None:
+                    return {"ok": False, "symbol": symbol, "error": "instrument_not_found"}
+
+                rates_status, rates_result = etoro_get(
+                    "market-data/instruments/rates?" + urlencode({"instrumentIds": str(instrument_id)})
+                )
+                if rates_status != 200 or not rates_result.get("ok"):
+                    return {"ok": False, "symbol": symbol, "instrument_id": instrument_id, "stage": "rates", "error": rates_result.get("error", "rates_failed"), "upstream_status": rates_status}
+                return {"ok": True, "symbol": symbol, "instrument_id": instrument_id, "rates": rates_result.get("data")}
+
+            results = [fetch_rate(symbol) for symbol in symbols]
+            if len(results) == 1:
+                result = results[0]
+                return self._json(200 if result.get("ok") else 502, result, head_only)
+            all_ok = all(result.get("ok") for result in results)
+            return self._json(200 if all_ok else 207, {"ok": all_ok, "results": results}, head_only)
         if path == "/etoro/instrument-search":
             query = parse_qs(urlsplit(self.path).query)
             symbol = query.get("symbol", ["AAPL"])[0].strip().upper()
