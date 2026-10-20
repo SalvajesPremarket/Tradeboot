@@ -19,11 +19,11 @@ class SafeFormulaTests(unittest.TestCase):
         self.assertTrue(evaluate_formula(formula, {"price": 7, "rvol": 3})["matched"])
 
     def test_missing_market_data_fails_closed(self):
-        with self.assertRaisesRegex(StrategyFormulaError, "Falta el dato"):
+        with self.assertRaisesRegex(StrategyFormulaError, "Missing value"):
             evaluate_formula("ema20 > price", {"price": 7})
 
     def test_unknown_identifier_rejected(self):
-        with self.assertRaisesRegex(StrategyFormulaError, "no reconocida"):
+        with self.assertRaisesRegex(StrategyFormulaError, "Unsupported variable"):
             validate_formula("made_up_filter > 1")
 
     def test_import_rejected(self):
