@@ -42,12 +42,17 @@
     <div><div class="eyebrow">Constructor de estrategias</div><h2>Mis estrategias</h2><p>Crea tantas estrategias como quieras. Ponles nombre, pega tus reglas o fórmula, guárdalas y activa/desactiva cada una por separado.</p></div>
     <span class="pill"><span class="dot"></span><span id="strategy-count">0 estrategias</span></span>
   </div>
+  <div class="form-actions" style="margin-top:16px">
+    <div class="field" style="flex:1;min-width:220px"><label for="strategy-token">Token privado de administración (para sincronizar entre dispositivos)</label><input id="strategy-token" type="password" autocomplete="current-password" placeholder="Configura TRADEBOOT_STRATEGY_ADMIN_TOKEN en Render"></div>
+    <button type="button" class="secondary" id="strategy-connect">Conectar almacenamiento compartido</button>
+    <span id="strategy-cloud-status" class="status-note" role="status" aria-live="polite">Guardado local en este navegador.</span>
+  </div>
   <form id="strategy-form" class="strategy-form">
     <div class="field"><label for="strategy-name">Nombre de la estrategia</label><input id="strategy-name" maxlength="80" placeholder="Ej. Ruptura de apertura" required></div>
     <div class="field"><label for="strategy-formula">Fórmula / reglas de la estrategia</label><textarea id="strategy-formula" maxlength="12000" placeholder="Ej. price > 5 and change_pct >= 2. Variables: price, bid, ask, change_pct, gap_pct, volume, rvol. Usa and/or/not en minúsculas." required></textarea></div>
     <div class="field full"><div class="form-actions"><button type="submit" id="strategy-save">＋ Guardar estrategia</button><button type="button" class="secondary" id="strategy-validate">Validar fórmula</button><button type="button" class="secondary" id="strategy-cancel" hidden>Cancelar edición</button><span id="strategy-validation-status" class="status-note" role="status" aria-live="polite"></span></div></div>
   </form>
-  <div class="status-note"><strong>Importante:</strong> el validador admite expresiones seguras como <code>price &gt; 5 and change_pct &gt;= 2</code>. Las estrategias todavía se guardan solo en este navegador y no se evalúan automáticamente contra el mercado ni envían órdenes. Tradeboot permanece en modo de solo lectura.</div>
+  <div class="status-note"><strong>Importante:</strong> el validador admite expresiones seguras como <code>price &gt; 5 and change_pct &gt;= 2</code>. Sin conectar el almacenamiento compartido, las estrategias se guardan solo en este navegador. Conectado, se guardan en PostgreSQL. Las fórmulas solo evalúan capturas utilizables en esta pantalla; no envían órdenes. Tradeboot permanece en modo de solo lectura.</div>
   <div class="strategy-list" id="strategy-list"><div class="empty-strategies">Todavía no has creado estrategias. Usa el formulario para añadir la primera.</div></div>
 </section>
 
@@ -63,10 +68,44 @@ const $=id=>document.getElementById(id);
 const strategyStoreKey='tradeboot.strategyConfigs.v1';
 let strategies=[];
 let editingStrategyId=null;
+let cloudMode=false;
+let cloudToken=sessionStorage.getItem('tradeboot.strategyAdminToken')||'';
 const strategyEvaluationResults={};
 const strategyName=$('strategy-name'), strategyFormula=$('strategy-formula');
 function loadStrategies(){try{const parsed=JSON.parse(localStorage.getItem(strategyStoreKey)||'[]');strategies=Array.isArray(parsed)?parsed.filter(s=>s&&typeof s.id==='string'&&typeof s.name==='string'&&typeof s.formula==='string'):[]}catch(_){strategies=[]}}
-function persistStrategies(){localStorage.setItem(strategyStoreKey,JSON.stringify(strategies))}
+async function persistStrategies(){
+ if(!cloudMode){localStorage.setItem(strategyStoreKey,JSON.stringify(strategies));return}
+ const status=$('strategy-cloud-status');
+ try{
+  const response=await fetch('/strategies',{method:'PUT',headers:{'Content-Type':'application/json','X-Strategy-Admin-Token':cloudToken},body:JSON.stringify({strategies}),cache:'no-store'});
+  const data=await response.json();
+  if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'No se pudo guardar en el servidor');
+  strategies=data.strategies;
+  localStorage.setItem(strategyStoreKey,JSON.stringify(strategies));
+  status.textContent='Conectado · estrategias guardadas en almacenamiento compartido.';
+  renderStrategies();
+ }catch(error){status.textContent='Error al sincronizar: '+error.message;cloudMode=false}
+}
+async function connectStrategyStorage(){
+ const token=$('strategy-token').value.trim(), status=$('strategy-cloud-status');
+ if(!token){status.textContent='Introduce el token privado configurado en Render.';return}
+ status.textContent='Conectando…';
+ try{
+  const response=await fetch('/strategies',{headers:{'X-Strategy-Admin-Token':token},cache:'no-store'});
+  const data=await response.json();
+  if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'No se pudo conectar; revisa el token y DATABASE_URL en Render.');
+  const local=strategies;
+  cloudMode=true;cloudToken=token;sessionStorage.setItem('tradeboot.strategyAdminToken',token);
+  if(!data.strategies.length&&local.length&&confirm('El servidor está vacío. ¿Quieres copiar tus '+local.length+' estrategias locales al almacenamiento compartido?')){
+   strategies=local;await persistStrategies();
+  }else{
+   strategies=data.strategies;localStorage.setItem(strategyStoreKey,JSON.stringify(strategies));renderStrategies();status.textContent='Conectado · estrategias cargadas del almacenamiento compartido.';
+  }
+ }catch(error){cloudMode=false;status.textContent='No conectado: '+error.message}
+}
+$('strategy-token').value=cloudToken;
+$('strategy-connect').addEventListener('click',connectStrategyStorage);
+
 function renderStrategies(){
  $('strategy-count').textContent=strategies.length+' estrategia'+(strategies.length===1?'':'s');
  const list=$('strategy-list');
@@ -140,7 +179,7 @@ $('strategy-list').addEventListener('click',event=>{
  if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
  if(button.dataset.action==='delete'){if(!confirm('¿Borrar la estrategia «'+item.name+'»?'))return;strategies=strategies.filter(s=>s.id!==item.id);if(editingStrategyId===item.id)resetStrategyForm();persistStrategies();renderStrategies()}
 });
-loadStrategies();renderStrategies();
+loadStrategies();renderStrategies();if(cloudToken)connectStrategyStorage();
 
 const symbols=['AAPL','MSFT','NVDA'];
 const names={AAPL:'Apple Inc.',MSFT:'Microsoft',NVDA:'NVIDIA'};
