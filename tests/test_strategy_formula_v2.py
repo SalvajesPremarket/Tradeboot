@@ -38,6 +38,17 @@ class SafeFormulaTests(unittest.TestCase):
         with self.assertRaisesRegex(StrategyFormulaError, "dividir entre cero"):
             evaluate_formula("price / 0 > 1", {"price": 5})
 
+    def test_market_variable_cannot_be_overwritten(self):
+        with self.assertRaisesRegex(StrategyFormulaError, "sobrescribir"):
+            validate_formula("price = 100\\nprice > 5")
+
+    def test_unsupported_statement_fails_validation(self):
+        with self.assertRaises(StrategyFormulaError):
+            validate_formula("assert price > 5")
+
+    def test_boolean_short_circuit(self):
+        self.assertFalse(evaluate_formula("False and rvol > 2", {})["matched"])
+
 
 if __name__ == "__main__":
     unittest.main()
