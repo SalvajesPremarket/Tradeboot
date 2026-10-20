@@ -72,9 +72,15 @@ def _expr(n, env):
             return not v
         return v if isinstance(n.op, ast.UAdd) else -v
     if isinstance(n, ast.BoolOp) and isinstance(n.op, (ast.And, ast.Or)):
-        vals = [_expr(x, env) for x in n.values]
-        if not all(isinstance(v, bool) for v in vals): raise StrategyFormulaError("AND/OR requiere comparaciones booleanas.")
-        return all(vals) if isinstance(n.op, ast.And) else any(vals)
+        for child in n.values:
+            value = _expr(child, env)
+            if not isinstance(value, bool):
+                raise StrategyFormulaError("AND/OR requiere comparaciones booleanas.")
+            if isinstance(n.op, ast.And) and not value:
+                return False
+            if isinstance(n.op, ast.Or) and value:
+                return True
+        return isinstance(n.op, ast.And)
     if isinstance(n, ast.Compare):
         left = _expr(n.left, env)
         for op, child in zip(n.ops, n.comparators):
@@ -115,17 +121,36 @@ def _block(statements, env, depth=0):
 
 def validate_formula(formula):
     tree = _parse(formula)
+    allowed_nodes = (
+        ast.Module, ast.Assign, ast.If, ast.Expr, ast.Name, ast.Load, ast.Store, ast.Constant,
+        ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare, ast.Call,
+        ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,
+        ast.UAdd, ast.USub, ast.Not, ast.And, ast.Or,
+        ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+    )
+    if any(not isinstance(node, allowed_nodes) for node in ast.walk(tree)):
+        raise StrategyFormulaError("Esta instrucción o sintaxis Python no está permitida.")
+    def check_statements(statements):
+        if len(statements) > 40:
+            raise StrategyFormulaError("Demasiadas instrucciones.")
+        for statement in statements:
+            if isinstance(statement, ast.Assign):
+                if len(statement.targets) != 1 or not isinstance(statement.targets[0], ast.Name):
+                    raise StrategyFormulaError("Solo se permite asignar a una variable por instrucción.")
+                name = statement.targets[0].id
+                if name.startswith("_") or name in FUNCS or name in CATALOG:
+                    raise StrategyFormulaError("No se permite sobrescribir una variable de mercado o función: " + name)
+            elif isinstance(statement, ast.If):
+                check_statements(statement.body)
+                check_statements(statement.orelse)
+            elif not isinstance(statement, ast.Expr):
+                raise StrategyFormulaError("Instrucción Python no permitida: " + type(statement).__name__ + ".")
+    check_statements(tree.body)
     loads = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id not in FUNCS}
     stores = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
     unknown = sorted(loads - set(CATALOG) - stores)
     if unknown: raise StrategyFormulaError("Unsupported variable(s): " + ", ".join(unknown) + ".")
     used = sorted(loads.intersection(CATALOG))
-    # Reject dangerous syntax during validation, even if branch wouldn't run.
-    forbidden = (ast.Import, ast.ImportFrom, ast.For, ast.While, ast.With, ast.Try, ast.FunctionDef,
-                 ast.ClassDef, ast.Lambda, ast.Attribute, ast.Subscript, ast.ListComp, ast.DictComp,
-                 ast.SetComp, ast.GeneratorExp, ast.Delete, ast.Await, ast.Yield, ast.NamedExpr)
-    if any(isinstance(n, forbidden) for n in ast.walk(tree)):
-        raise StrategyFormulaError("Esta instrucción Python no está permitida por seguridad.")
     return {"valid": True, "variables": used, "syntax": "safe-python-subset",
             "available_variables": sorted(CATALOG), "requires_data": used}
 
