@@ -23,7 +23,7 @@ class QuoteFreshnessTests(unittest.TestCase):
         result = quote_freshness({"rates": [{"bid": 10.0}]})
         self.assertFalse(result["quote_is_fresh"])
         self.assertFalse(result["quote_is_usable"])
-        self.assertEqual(result["freshness_status"], "invalid_timestamp")
+        self.assertEqual(result["freshness_status"], "unknown_timestamp")
 
     def test_recent_timestamp_is_fresh(self):
         result = quote_freshness({"rates": [{"Date": stamp(), "IsMarketOpen": "true"}]})
