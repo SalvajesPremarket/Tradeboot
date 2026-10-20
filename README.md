@@ -5,22 +5,24 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 ## Estado actual
 
 - API HTTP de solo lectura conectada a los endpoints REST de datos de mercado de eToro.
+- Dashboard que actualiza snapshots puntuales de hasta cinco símbolos cada 30 segundos y evalúa las estrategias activadas como señales simuladas.
 - Endpoint de diagnóstico WebSocket que autentica, solicita snapshots y cierra la conexión; todavía no es un consumidor continuo de streaming.
 - Indicadores de antigüedad, estado de mercado y señales de datos retrasados cuando eToro los proporciona.
 - No envía órdenes reales ni ejecuta operaciones. El trading automático permanece deshabilitado.
-- Las listas locales del módulo base están en memoria y no persisten entre reinicios.
+- Las estrategias se guardan localmente en el navegador salvo que se configure el almacenamiento compartido con `TRADEBOOT_STRATEGY_ADMIN_TOKEN` y la base de datos correspondiente.
 - La calidad de cotización no se puede confirmar completamente cuando el proveedor omite metadatos.
 
 ## Despliegue
 
 - Servicio: `tradeboot-api` en Render.
 - URL: https://tradeboot-api.onrender.com
-- Rama: `main`; el despliegue automático está deshabilitado, así que los cambios requieren un despliegue manual.
+- Rama: `main`; el despliegue automático está activado en modo `On Commit`.
+- Los cambios enviados a `main` inician un despliegue automático en Render.
 
 ## Endpoints
 
 - `GET /health` — comprobación de salud.
-- `GET /` — resumen del servicio.
+- `GET /` — dashboard.
 - `GET /status` y `GET /watchlist` — estado local de solo lectura.
 - `GET /etoro/watchlist` — watchlist de eToro.
 - `GET /etoro/instrument-search?symbol=AAPL` — búsqueda de instrumento.
@@ -28,6 +30,8 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 - `GET /etoro/instrument-rates?symbols=AAPL,MSFT,NVDA` — snapshot REST de hasta cinco símbolos.
 - `GET /etoro/instrument-stream?symbols=AAPL,MSFT,NVDA` — diagnóstico WebSocket de snapshots puntuales.
 - `GET /etoro/demo/portfolio` — consulta de cartera demo.
+- `POST /strategies/validate` — validar o evaluar una fórmula con los valores recibidos.
+- `POST /strategies/evaluate-market` — evaluar una fórmula con una cotización eToro que cumpla los controles de calidad.
 
 ## Campos de calidad
 
@@ -38,6 +42,8 @@ Las respuestas de tasas incluyen `quote_time`, `quote_age_seconds`, `quote_is_fr
 ## Configuración
 
 Render requiere `ETORO_API_KEY` y `ETORO_USER_KEY` como variables de entorno secretas. No incluirlas en código, commits ni registros. `ETORO_MAX_QUOTE_AGE_SECONDS` permite configurar el umbral de antigüedad; por defecto son 300 segundos.
+
+Para sincronizar estrategias y capital entre dispositivos se necesita configurar `TRADEBOOT_STRATEGY_ADMIN_TOKEN` y la base de datos usada por `strategy_store.py`. Sin ese modo, las estrategias del navegador no se comparten entre dispositivos.
 
 ## Ejecutar localmente
 
@@ -54,7 +60,9 @@ La API escucha en `http://localhost:10000` por defecto; puede cambiarse con `POR
 
 1. Ejecutar pruebas automatizadas y comprobar los endpoints desplegados.
 2. Validar snapshots durante mercado abierto y cerrado, y verificar cómo reporta eToro cotizaciones retrasadas.
-3. Implementar un consumidor WebSocket continuo si se requiere actualización en tiempo real.
-4. Definir persistencia, monitoreo, límites de riesgo y requisitos de operación antes de diseñar cualquier ejecución de trading.
+3. Confirmar que las variables de entorno de eToro están configuradas y que las cotizaciones reales llegan correctamente.
+4. Confirmar si se necesita persistencia compartida y configurar/verificar el token y la base de datos.
+5. Implementar un consumidor WebSocket continuo si se requiere actualización en tiempo real.
+6. Definir persistencia, monitoreo, límites de riesgo y requisitos de operación antes de diseñar cualquier ejecución de trading.
 
 **Seguridad:** Tradeboot permanece en modo de solo lectura. No habilitar trading automático a partir de las pruebas de datos de mercado.
