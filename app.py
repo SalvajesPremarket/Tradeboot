@@ -172,8 +172,8 @@ def etoro_get(path):
                         safe_value = str(value)[:240]
                         # Avoid returning anything that resembles a long credential/token.
                         import re
-                        safe_value = re.sub(r"(?i)(key|token|secret|authorization)\\s*[:=]\\s*[^,;\\s]+", r"\\1=[REDACTED]", safe_value)
-                        safe_value = re.sub(r"\\b[A-Za-z0-9_-]{40,}\\b", "[REDACTED]", safe_value)
+                        safe_value = re.sub(r"(?i)(key|token|secret|authorization)\s*[:=]\s*[^,;\s]+", r"\1=[REDACTED]", safe_value)
+                        safe_value = re.sub(r"\b[A-Za-z0-9_-]{40,}\b", "[REDACTED]", safe_value)
                         diagnostic[field] = safe_value
         except (ValueError, UnicodeError):
             pass
