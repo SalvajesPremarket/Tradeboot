@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from tradeboot import Tradeboot
-from strategy_engine import StrategyFormulaError, evaluate_formula
+from strategy_engine import StrategyFormulaError, evaluate_formula, validate_formula
 
 
 module = Tradeboot()
@@ -539,11 +539,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "invalid_json"})
         if not isinstance(payload, dict) or not isinstance(payload.get("formula"), str):
             return self._json(400, {"ok": False, "error": "formula_required"})
+        validate_only = payload.get("validate_only", False) is True
         values = payload.get("values", {})
         if not isinstance(values, dict):
             return self._json(400, {"ok": False, "error": "values_must_be_object"})
         try:
-            result = evaluate_formula(payload["formula"], values)
+            result = validate_formula(payload["formula"]) if validate_only else evaluate_formula(payload["formula"], values)
             return self._json(200, {"ok": True, **result})
         except StrategyFormulaError as exc:
             return self._json(400, {"ok": False, "error": "invalid_strategy_formula", "detail": str(exc)})
