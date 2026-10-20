@@ -47,9 +47,19 @@
     <button type="button" class="secondary" id="strategy-connect">Conectar almacenamiento compartido</button>
     <span id="strategy-cloud-status" class="status-note" role="status" aria-live="polite">Guardado local en este navegador.</span>
   </div>
+  <div class="panel" style="margin-top:18px;background:#0f1929">
+    <h3>Capital general para operar (solo configuración)</h3>
+    <p>Define el dinero total que autorizas para tus estrategias. Cada estrategia tendrá su propio porcentaje de ese monto.</p>
+    <div class="strategy-form">
+      <div class="field"><label for="strategy-capital">Monto general disponible (USD)</label><input id="strategy-capital" type="number" min="0" step="0.01" value="0" inputmode="decimal"></div>
+      <div class="field"><label>Estado</label><div class="status-note" id="capital-status">El capital es solo una configuración; no se ejecutan órdenes.</div><div class="form-actions"><button type="button" id="capital-save" class="secondary">Guardar monto general</button></div></div>
+    </div>
+  </div>
   <form id="strategy-form" class="strategy-form">
     <div class="field"><label for="strategy-name">Nombre de la estrategia</label><input id="strategy-name" maxlength="80" placeholder="Ej. Ruptura de apertura" required></div>
-    <div class="field"><label for="strategy-formula">Fórmula / reglas de la estrategia</label><textarea id="strategy-formula" maxlength="1000" placeholder="Ej. price > 5 and change_pct >= 2. Variables: price, bid, ask, change_pct, gap_pct, volume, rvol. Usa and/or/not en minúsculas." required></textarea></div>
+    <div class="field"><label for="strategy-formula">Fórmula / reglas de la estrategia</label><textarea id="strategy-formula" maxlength="1000" placeholder="Pega aquí tu fórmula Python/reglas ya preparadas." required></textarea></div>
+    <div class="field"><label for="strategy-allocation">Porcentaje del capital general para esta estrategia (%)</label><input id="strategy-allocation" type="number" min="0" max="100" step="0.01" value="10" required><span class="status-note">Cada estrategia usa su porcentaje independiente del monto general.</span></div>
+    <div class="field"><label>Presupuesto calculado</label><div id="strategy-budget-preview" class="status-note">$0.00 asignados · cálculo informativo</div></div>
     <div class="field full"><div class="form-actions"><button type="submit" id="strategy-save">＋ Guardar estrategia</button><button type="button" class="secondary" id="strategy-validate">Validar fórmula</button><button type="button" class="secondary" id="strategy-cancel" hidden>Cancelar edición</button><span id="strategy-validation-status" class="status-note" role="status" aria-live="polite"></span></div></div>
   </form>
   <div class="status-note"><strong>Importante:</strong> el validador admite expresiones seguras como <code>price &gt; 5 and change_pct &gt;= 2</code>. Sin conectar el almacenamiento compartido, las estrategias se guardan solo en este navegador. Conectado, se guardan en PostgreSQL. Las fórmulas solo evalúan capturas utilizables en esta pantalla; no envían órdenes. Tradeboot permanece en modo de solo lectura.</div>
@@ -69,9 +79,19 @@ const strategyStoreKey='tradeboot.strategyConfigs.v1';
 let strategies=[];
 let editingStrategyId=null;
 let cloudMode=false;
+let generalCapital=Number(localStorage.getItem('tradeboot.generalCapital.v1')||0);
 let cloudToken=sessionStorage.getItem('tradeboot.strategyAdminToken')||'';
 const strategyEvaluationResults={};
 const strategyName=$('strategy-name'), strategyFormula=$('strategy-formula');
+const strategyAllocation=$('strategy-allocation');
+function moneyUSD(value){return Number(value||0).toLocaleString('en-US',{style:'currency',currency:'USD'});}
+function updateBudgetPreview(){const pct=Number(strategyAllocation.value);const valid=Number.isFinite(pct)&&pct>=0&&pct<=100;$('strategy-budget-preview').textContent=moneyUSD(valid?generalCapital*pct/100:0)+' asignados · cálculo informativo';}
+function loadGeneralCapital(){$('strategy-capital').value=String(generalCapital);updateBudgetPreview();}
+$('strategy-capital').addEventListener('input',()=>{const n=Number($('strategy-capital').value);if(Number.isFinite(n)&&n>=0){generalCapital=n;updateBudgetPreview();}});
+strategyAllocation.addEventListener('input',updateBudgetPreview);
+async function saveGeneralCapital(){const input=$('strategy-capital'),status=$('capital-status'),n=Number(input.value);if(!Number.isFinite(n)||n<0){status.textContent='Introduce un monto igual o mayor que cero.';return;}generalCapital=n;localStorage.setItem('tradeboot.generalCapital.v1',String(n));updateBudgetPreview();if(cloudMode){try{const r=await fetch('/strategies/capital',{method:'PUT',headers:{'Content-Type':'application/json','X-Strategy-Admin-Token':cloudToken},body:JSON.stringify({capital:generalCapital}),cache:'no-store'});const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.detail||d.error||'No se pudo guardar en PostgreSQL');status.textContent='Monto general guardado en PostgreSQL.';}catch(e){status.textContent='Guardado local; error al sincronizar: '+e.message;}}else status.textContent='Guardado en este navegador. Conecta el almacenamiento compartido para sincronizar.';}
+$('capital-save').addEventListener('click',saveGeneralCapital);
+loadGeneralCapital();
 function loadStrategies(){try{const parsed=JSON.parse(localStorage.getItem(strategyStoreKey)||'[]');strategies=Array.isArray(parsed)?parsed.filter(s=>s&&typeof s.id==='string'&&typeof s.name==='string'&&typeof s.formula==='string'):[]}catch(_){strategies=[]}}
 async function persistStrategies(){
  if(!cloudMode){localStorage.setItem(strategyStoreKey,JSON.stringify(strategies));return}
@@ -100,6 +120,7 @@ async function connectStrategyStorage(){
    strategies=local;await persistStrategies();
   }else{
    strategies=data.strategies;localStorage.setItem(strategyStoreKey,JSON.stringify(strategies));renderStrategies();status.textContent='Conectado · estrategias cargadas del almacenamiento compartido.';
+   try{const cr=await fetch('/strategies/capital',{headers:{'X-Strategy-Admin-Token':token},cache:'no-store'});const cd=await cr.json();if(cr.ok&&cd.ok){generalCapital=Number(cd.capital)||0;$('strategy-capital').value=String(generalCapital);localStorage.setItem('tradeboot.generalCapital.v1',String(generalCapital));updateBudgetPreview();$('capital-status').textContent='Monto general cargado de PostgreSQL.';}}catch(_){}
   }
  }catch(error){cloudMode=false;status.textContent='No conectado: '+error.message}
 }
@@ -151,13 +172,14 @@ async function evaluateActiveStrategies(resultsBySymbol){
  }));
  renderStrategies();
 }
-function resetStrategyForm(){editingStrategyId=null;$('strategy-form').reset();$('strategy-save').textContent='＋ Guardar estrategia';$('strategy-cancel').hidden=true;$('strategy-validation-status').textContent=''}
+function resetStrategyForm(){editingStrategyId=null;$('strategy-form').reset();strategyAllocation.value='10';updateBudgetPreview();$('strategy-save').textContent='＋ Guardar estrategia';$('strategy-cancel').hidden=true;$('strategy-validation-status').textContent=''}
 $('strategy-form').addEventListener('submit',event=>{
  event.preventDefault();
- const name=strategyName.value.trim(),formula=strategyFormula.value.trim();
+ const name=strategyName.value.trim(),formula=strategyFormula.value.trim(),allocationPercent=Number(strategyAllocation.value);
  if(!name||!formula)return;
- if(editingStrategyId){const item=strategies.find(s=>s.id===editingStrategyId);if(item){item.name=name;item.formula=formula}}
- else{strategies.push({id:(typeof crypto!=='undefined'&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2),name,formula,enabled:false,createdAt:new Date().toISOString()})}
+ if(!Number.isFinite(allocationPercent)||allocationPercent<0||allocationPercent>100){$('strategy-validation-status').textContent='El porcentaje debe estar entre 0 y 100.';return;}
+ if(editingStrategyId){const item=strategies.find(s=>s.id===editingStrategyId);if(item){item.name=name;item.formula=formula;item.allocationPercent=allocationPercent}}
+ else{strategies.push({id:(typeof crypto!=='undefined'&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2),name,formula,enabled:false,allocationPercent,createdAt:new Date().toISOString()})}
  try{persistStrategies();renderStrategies();resetStrategyForm()}catch(_){alert('No se pudo guardar en el almacenamiento local de este navegador.')}
 });
 $('strategy-validate').addEventListener('click',async()=>{
@@ -176,7 +198,7 @@ $('strategy-list').addEventListener('click',event=>{
  const button=event.target.closest('button[data-action]');if(!button)return;
  const item=strategies.find(s=>s.id===button.dataset.id);if(!item)return;
  if(button.dataset.action==='toggle'){item.enabled=!item.enabled;persistStrategies();renderStrategies()}
- if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
+ if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;strategyAllocation.value=String(item.allocationPercent??10);updateBudgetPreview();$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
  if(button.dataset.action==='delete'){if(!confirm('¿Borrar la estrategia «'+item.name+'»?'))return;strategies=strategies.filter(s=>s.id!==item.id);if(editingStrategyId===item.id)resetStrategyForm();persistStrategies();renderStrategies()}
 });
 loadStrategies();renderStrategies();if(cloudToken)connectStrategyStorage();
