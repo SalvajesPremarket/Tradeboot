@@ -40,7 +40,7 @@ class SafeFormulaTests(unittest.TestCase):
 
     def test_market_variable_cannot_be_overwritten(self):
         with self.assertRaisesRegex(StrategyFormulaError, "sobrescribir"):
-            validate_formula("price = 100\\nprice > 5")
+            validate_formula("price = 100\nprice > 5")
 
     def test_unsupported_statement_fails_validation(self):
         with self.assertRaises(StrategyFormulaError):
