@@ -15,7 +15,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 from tradeboot import Tradeboot
 from strategy_engine import StrategyFormulaError, evaluate_formula, validate_formula
-from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies
+from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital
 
 
 module = Tradeboot()
@@ -571,26 +571,35 @@ class Handler(BaseHTTPRequestHandler):
             return None, (400, {"ok": False, "error": "invalid_json"})
 
     def do_GET(self):
-        if urlsplit(self.path).path == "/strategies":
+        path = urlsplit(self.path).path
+        if path in ("/strategies", "/strategies/capital"):
             if not self._strategy_admin_authorized():
                 return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
             try:
+                if path == "/strategies/capital":
+                    return self._json(200, {"ok": True, "capital": get_general_capital()})
                 return self._json(200, {"ok": True, "strategies": list_strategies()})
             except StrategyStoreUnavailable as exc:
                 return self._json(503, {"ok": False, "error": str(exc)})
         self._dispatch()
 
     def do_PUT(self):
-        if urlsplit(self.path).path != "/strategies":
+        path = urlsplit(self.path).path
+        if path not in ("/strategies", "/strategies/capital"):
             return self._json(404, {"ok": False, "error": "not_found"})
         if not self._strategy_admin_authorized():
             return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
         payload, error = self._read_json_body()
         if error:
             return self._json(error[0], error[1])
-        if not isinstance(payload, dict) or not isinstance(payload.get("strategies"), list):
-            return self._json(400, {"ok": False, "error": "strategies_array_required"})
         try:
+            if path == "/strategies/capital":
+                if not isinstance(payload, dict) or isinstance(payload.get("capital"), bool) or not isinstance(payload.get("capital"), (int, float)):
+                    raise ValueError("A numeric capital amount is required.")
+                capital = set_general_capital(payload["capital"])
+                return self._json(200, {"ok": True, "capital": capital})
+            if not isinstance(payload, dict) or not isinstance(payload.get("strategies"), list):
+                return self._json(400, {"ok": False, "error": "strategies_array_required"})
             for item in payload["strategies"]:
                 if not isinstance(item, dict) or not isinstance(item.get("formula"), str):
                     raise ValueError("Each strategy needs a formula.")
