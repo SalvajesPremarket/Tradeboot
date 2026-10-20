@@ -6,6 +6,7 @@ variables. No order placement or account-changing requests are implemented.
 import json
 import os
 import uuid
+import hmac
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
@@ -14,6 +15,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 from tradeboot import Tradeboot
 from strategy_engine import StrategyFormulaError, evaluate_formula, validate_formula
+from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies
 
 
 module = Tradeboot()
@@ -549,8 +551,58 @@ class Handler(BaseHTTPRequestHandler):
         except StrategyFormulaError as exc:
             return self._json(400, {"ok": False, "error": "invalid_strategy_formula", "detail": str(exc)})
 
+    def _strategy_admin_authorized(self):
+        expected = os.environ.get("TRADEBOOT_STRATEGY_ADMIN_TOKEN", "")
+        supplied = self.headers.get("X-Strategy-Admin-Token", "")
+        return bool(expected and supplied and hmac.compare_digest(expected, supplied))
+
+    def _read_json_body(self, max_bytes=262144):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except (TypeError, ValueError):
+            return None, (400, {"ok": False, "error": "invalid_content_length"})
+        if length < 1 or length > max_bytes:
+            return None, (413 if length > max_bytes else 400, {
+                "ok": False, "error": "request_body_size_invalid", "max_bytes": max_bytes,
+            })
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8")), None
+        except (UnicodeError, json.JSONDecodeError):
+            return None, (400, {"ok": False, "error": "invalid_json"})
+
     def do_GET(self):
+        if urlsplit(self.path).path == "/strategies":
+            if not self._strategy_admin_authorized():
+                return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
+            try:
+                return self._json(200, {"ok": True, "strategies": list_strategies()})
+            except StrategyStoreUnavailable as exc:
+                return self._json(503, {"ok": False, "error": str(exc)})
         self._dispatch()
+
+    def do_PUT(self):
+        if urlsplit(self.path).path != "/strategies":
+            return self._json(404, {"ok": False, "error": "not_found"})
+        if not self._strategy_admin_authorized():
+            return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
+        payload, error = self._read_json_body()
+        if error:
+            return self._json(error[0], error[1])
+        if not isinstance(payload, dict) or not isinstance(payload.get("strategies"), list):
+            return self._json(400, {"ok": False, "error": "strategies_array_required"})
+        try:
+            for item in payload["strategies"]:
+                if not isinstance(item, dict) or not isinstance(item.get("formula"), str):
+                    raise ValueError("Each strategy needs a formula.")
+                validate_formula(item["formula"])
+            saved = replace_strategies(payload["strategies"])
+            return self._json(200, {"ok": True, "strategies": saved})
+        except StrategyFormulaError as exc:
+            return self._json(400, {"ok": False, "error": "invalid_strategy_formula", "detail": str(exc)})
+        except ValueError as exc:
+            return self._json(400, {"ok": False, "error": "invalid_strategy", "detail": str(exc)})
+        except StrategyStoreUnavailable as exc:
+            return self._json(503, {"ok": False, "error": str(exc)})
 
     def do_HEAD(self):
         self._dispatch(head_only=True)
