@@ -50,8 +50,8 @@ def _expr(n, env):
         raise StrategyFormulaError("Solo se admiten números finitos y True/False.")
     if isinstance(n, ast.Name):
         if n.id in FUNCS: raise StrategyFormulaError("Usa paréntesis al llamar " + n.id + ".")
-        if n.id not in CATALOG and n.id not in env: raise StrategyFormulaError("Variable no reconocida: " + n.id + ".")
-        if n.id not in env or env[n.id] is None: raise StrategyFormulaError("Falta el dato '" + n.id + "': " + CATALOG.get(n.id, "variable calculada") + ". No se inventarán valores.")
+        if n.id not in CATALOG and n.id not in env: raise StrategyFormulaError("Unsupported variable: " + n.id)
+        if n.id not in env or env[n.id] is None: raise StrategyFormulaError("Missing value for variable: " + n.id + ". " + CATALOG.get(n.id, "variable calculada") + "; no se inventarán valores.")
         v = env[n.id]
         if isinstance(v, bool): return v
         if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v):
@@ -118,7 +118,7 @@ def validate_formula(formula):
     loads = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id not in FUNCS}
     stores = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
     unknown = sorted(loads - set(CATALOG) - stores)
-    if unknown: raise StrategyFormulaError("Variable(s) no reconocida(s): " + ", ".join(unknown) + ".")
+    if unknown: raise StrategyFormulaError("Unsupported variable(s): " + ", ".join(unknown) + ".")
     used = sorted(loads.intersection(CATALOG))
     # Reject dangerous syntax during validation, even if branch wouldn't run.
     forbidden = (ast.Import, ast.ImportFrom, ast.For, ast.While, ast.With, ast.Try, ast.FunctionDef,
@@ -134,5 +134,5 @@ def evaluate_formula(formula, values=None):
     validation = validate_formula(formula)
     result = _block(_parse(formula).body, dict(values or {}))
     if not isinstance(result, bool):
-        raise StrategyFormulaError("La última instrucción debe ser una condición True/False.")
-    return {"valid": True, "matched": result, "variables": validation["variables"], "syntax": "safe-python-subset"}
+        raise StrategyFormulaError("Formula must return TRUE/FALSE.")
+    return {"valid": True, "matched": result, "variables": validation["variables"]}
