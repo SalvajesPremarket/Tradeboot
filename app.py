@@ -21,8 +21,23 @@ ETORO_TIMEOUT_SECONDS = 15
 DEFAULT_MAX_QUOTE_AGE_SECONDS = 300
 
 
+def _parse_provider_bool(value):
+    """Parse provider booleans without treating strings like 'False' as true."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "yes", "open"):
+            return True
+        if normalized in ("false", "0", "no", "closed"):
+            return False
+    return None
+
+
 def quote_freshness(rates_payload):
-    """Annotate a rate snapshot with its age; this is not a streaming guarantee."""
+    """Annotate snapshot age and provider quality signals; not a streaming guarantee."""
     try:
         max_age = int(os.environ.get("ETORO_MAX_QUOTE_AGE_SECONDS", str(DEFAULT_MAX_QUOTE_AGE_SECONDS)))
         if max_age < 1:
@@ -39,10 +54,15 @@ def quote_freshness(rates_payload):
             "quote_age_seconds": None,
             "quote_is_fresh": False,
             "freshness_status": "unknown_timestamp",
+            "market_open": None,
+            "delayed_quote": None,
+            "quote_is_usable": False,
+            "quote_quality_status": "unknown_timestamp",
             "max_quote_age_seconds": max_age,
         }
 
-    quote_time = rate_rows[0].get("date") or rate_rows[0].get("Date")
+    row = rate_rows[0]
+    quote_time = row.get("date") or row.get("Date")
     try:
         parsed_time = datetime.fromisoformat(str(quote_time).replace("Z", "+00:00"))
         if parsed_time.tzinfo is None:
@@ -54,18 +74,52 @@ def quote_freshness(rates_payload):
             "quote_age_seconds": None,
             "quote_is_fresh": False,
             "freshness_status": "invalid_timestamp",
+            "market_open": None,
+            "delayed_quote": None,
+            "quote_is_usable": False,
+            "quote_quality_status": "invalid_timestamp",
             "max_quote_age_seconds": max_age,
         }
 
     fresh = age <= max_age
+    market_open_raw = row.get("IsMarketOpen", row.get("isMarketOpen", row.get("marketOpen")))
+    if market_open_raw is None:
+        market_open_raw = row.get("IsExchangeOpen", row.get("isExchangeOpen", row.get("exchangeOpen")))
+    market_open = _parse_provider_bool(market_open_raw)
+
+    delayed_values = []
+    for key in ("DelayedAsk", "DelayedBid", "delayedAsk", "delayedBid", "isDelayed", "IsDelayed"):
+        if key in row:
+            parsed = _parse_provider_bool(row.get(key))
+            if parsed is not None:
+                delayed_values.append(parsed)
+    delayed_quote = True if any(delayed_values) else (False if delayed_values else None)
+
+    if not fresh:
+        quality_status = "stale"
+    elif market_open is False:
+        quality_status = "market_closed"
+    elif delayed_quote is True:
+        quality_status = "delayed_quote"
+    elif market_open is True and delayed_quote is False:
+        quality_status = "fresh_market_open"
+    else:
+        quality_status = "fresh_quality_unconfirmed"
+
+    # Never label explicitly stale, closed-market, or delayed quotes as usable.
+    # Missing provider metadata remains visible as unconfirmed rather than fabricated.
+    usable = fresh and market_open is not False and delayed_quote is not True
     return {
         "quote_time": quote_time,
         "quote_age_seconds": age,
         "quote_is_fresh": fresh,
         "freshness_status": "fresh" if fresh else "stale",
+        "market_open": market_open,
+        "delayed_quote": delayed_quote,
+        "quote_is_usable": usable,
+        "quote_quality_status": quality_status,
         "max_quote_age_seconds": max_age,
     }
-
 
 def etoro_get(path):
     api_key = os.environ.get("ETORO_API_KEY")
@@ -254,9 +308,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200 if result.get("ok") else 502, result, head_only)
             all_ok = all(result.get("ok") for result in results)
             all_fresh = all(result.get("ok") and result.get("quote_is_fresh") for result in results)
+            all_usable = all(result.get("ok") and result.get("quote_is_usable") for result in results)
             return self._json(200 if all_ok else 207, {
                 "ok": all_ok,
                 "all_quotes_fresh": all_fresh,
+                "all_quotes_usable": all_usable,
                 "max_quote_age_seconds": results[0].get("max_quote_age_seconds", DEFAULT_MAX_QUOTE_AGE_SECONDS),
                 "results": results,
             }, head_only)
@@ -415,10 +471,12 @@ class Handler(BaseHTTPRequestHandler):
             results = [errors.get(symbol, {"ok": False, "symbol": symbol, "error": "no_result"}) for symbol in symbols]
             all_ok = all(result.get("ok") for result in results)
             all_fresh = all(result.get("ok") and result.get("quote_is_fresh") for result in results)
+            all_usable = all(result.get("ok") and result.get("quote_is_usable") for result in results)
             return self._json(200 if all_ok else 207, {
                 "ok": all_ok,
                 "source": "etoro_websocket_snapshot",
                 "all_quotes_fresh": all_fresh,
+                "all_quotes_usable": all_usable,
                 "max_quote_age_seconds": DEFAULT_MAX_QUOTE_AGE_SECONDS,
                 "results": results,
             }, head_only)
