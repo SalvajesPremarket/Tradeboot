@@ -5,6 +5,7 @@ variables. No order placement or account-changing requests are implemented.
 """
 import json
 import os
+import math
 import uuid
 import hmac
 from datetime import datetime, timezone
@@ -188,6 +189,122 @@ def etoro_get(path):
         }
     except (URLError, TimeoutError, OSError, ValueError):
         return 502, {"ok": False, "error": "etoro_api_unavailable"}
+
+
+def _numeric_market_value(row, keys):
+    """Return a finite numeric provider field; never coerce missing/invalid values."""
+    for key in keys:
+        if key not in row:
+            continue
+        value = row.get(key)
+        if isinstance(value, bool) or value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(number):
+            return number
+    return None
+
+
+def market_values_from_rate_row(row):
+    """Map only explicitly named eToro quote fields to matching formula variables."""
+    if not isinstance(row, dict):
+        return {}
+    aliases = {
+        "price": ("price", "Price", "last", "Last", "lastPrice", "LastPrice"),
+        "bid": ("bid", "Bid"),
+        "ask": ("ask", "Ask"),
+        "change_pct": ("changePercent", "ChangePercent", "dailyChangePercent",
+                       "DailyChangePercent", "change_pct", "changePct", "ChangePct"),
+        "volume": ("volume", "Volume", "tradingVolume", "TradingVolume"),
+    }
+    values = {}
+    for variable, keys in aliases.items():
+        value = _numeric_market_value(row, keys)
+        if value is not None:
+            values[variable] = value
+    return values
+
+
+def fetch_market_context(symbol):
+    """Fetch one exact eToro instrument quote and its existing freshness annotations."""
+    search_status, search_result = etoro_get(
+        "market-data/search?" + urlencode({"internalSymbolFull": symbol})
+    )
+    if search_status != 200 or not search_result.get("ok"):
+        return search_status, {
+            "ok": False, "symbol": symbol, "stage": "search",
+            "error": search_result.get("error", "instrument_search_failed"),
+            "upstream_status": search_status,
+        }
+
+    records = []
+    def collect_records(value):
+        if isinstance(value, dict):
+            records.append(value)
+            for nested in value.values():
+                if isinstance(nested, (dict, list)):
+                    collect_records(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                if isinstance(nested, (dict, list)):
+                    collect_records(nested)
+    collect_records(search_result.get("data"))
+
+    instrument_id = None
+    for record in records:
+        record_symbol = str(
+            record.get("internalSymbolFull") or record.get("InternalSymbolFull")
+            or record.get("symbol") or record.get("Symbol") or ""
+        ).strip().upper()
+        candidate_id = record.get("instrumentId", record.get("InstrumentId", record.get("instrumentID")))
+        if record_symbol == symbol and candidate_id is not None:
+            try:
+                instrument_id = int(candidate_id)
+                break
+            except (TypeError, ValueError):
+                continue
+    if instrument_id is None:
+        return 404, {"ok": False, "symbol": symbol, "error": "instrument_not_found"}
+
+    rates_status, rates_result = etoro_get(
+        "market-data/instruments/rates?" + urlencode({"instrumentIds": str(instrument_id)})
+    )
+    if rates_status != 200 or not rates_result.get("ok"):
+        return rates_status, {
+            "ok": False, "symbol": symbol, "instrument_id": instrument_id,
+            "stage": "rates", "error": rates_result.get("error", "rates_failed"),
+            "upstream_status": rates_status,
+        }
+
+    rates_payload = rates_result.get("data")
+    rows = rates_payload.get("rates") if isinstance(rates_payload, dict) else None
+    if not isinstance(rows, list):
+        rows = []
+    row = None
+    for candidate in rows:
+        if not isinstance(candidate, dict):
+            continue
+        raw_id = candidate.get("instrumentID", candidate.get("instrumentId", candidate.get("InstrumentId")))
+        try:
+            if int(raw_id) == instrument_id:
+                row = candidate
+                break
+        except (TypeError, ValueError):
+            continue
+    if row is None:
+        return 502, {
+            "ok": False, "symbol": symbol, "instrument_id": instrument_id,
+            "stage": "rates", "error": "rate_not_returned_for_instrument",
+        }
+
+    freshness = quote_freshness({"rates": [row]})
+    return 200, {
+        "ok": True, "symbol": symbol, "instrument_id": instrument_id,
+        "market_values": market_values_from_rate_row(row), **freshness,
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -525,7 +642,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        if path != "/strategies/validate":
+        if path not in ("/strategies/validate", "/strategies/evaluate-market"):
             return self._json(404, {"ok": False, "error": "not_found"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -541,6 +658,42 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "invalid_json"})
         if not isinstance(payload, dict) or not isinstance(payload.get("formula"), str):
             return self._json(400, {"ok": False, "error": "formula_required"})
+        if path == "/strategies/evaluate-market":
+            symbol = payload.get("symbol")
+            allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_"
+            if not isinstance(symbol, str):
+                return self._json(400, {"ok": False, "error": "symbol_required"})
+            symbol = symbol.strip().upper()
+            if not symbol or len(symbol) > 20 or any(char not in allowed for char in symbol):
+                return self._json(400, {"ok": False, "error": "invalid_symbol"})
+            try:
+                validate_formula(payload["formula"])
+            except StrategyFormulaError as exc:
+                return self._json(400, {"ok": False, "error": "invalid_strategy_formula", "detail": str(exc)})
+            status, context = fetch_market_context(symbol)
+            if status != 200 or not context.get("ok"):
+                return self._json(502, {"ok": False, "error": "market_context_unavailable", "market": context})
+            if not context.get("quote_is_usable"):
+                return self._json(409, {
+                    "ok": False, "error": "quote_not_usable",
+                    "market": {key: context.get(key) for key in (
+                        "symbol", "quote_time", "quote_age_seconds", "quote_is_fresh",
+                        "market_open", "delayed_quote", "quote_is_usable",
+                        "quote_quality_status", "max_quote_age_seconds",
+                    )},
+                })
+            try:
+                result = evaluate_formula(payload["formula"], context.get("market_values", {}))
+                return self._json(200, {
+                    "ok": True, "symbol": symbol, "market": context, "evaluation": result,
+                    "note": "Only explicitly available eToro fields were mapped. Missing variables are not fabricated.",
+                })
+            except StrategyFormulaError as exc:
+                return self._json(422, {
+                    "ok": False, "error": "strategy_data_unavailable",
+                    "detail": str(exc), "market": context,
+                })
+
         validate_only = payload.get("validate_only", False) is True
         values = payload.get("values", {})
         if not isinstance(values, dict):
