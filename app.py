@@ -120,7 +120,7 @@ def quote_freshness(rates_payload):
 
     # Never label explicitly stale, closed-market, or delayed quotes as usable.
     # Missing provider metadata remains visible as unconfirmed rather than fabricated.
-    usable = fresh and market_open is not False and delayed_quote is not True
+    usable = fresh and market_open is True and delayed_quote is False
     return {
         "quote_time": quote_time,
         "quote_age_seconds": age,
