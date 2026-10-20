@@ -92,6 +92,13 @@ def _evaluate(node, values):
     raise StrategyFormulaError("Unsupported syntax. Use numeric variables, arithmetic, comparisons, and AND/OR/NOT.")
 
 
+def validate_formula(formula):
+    """Check syntax and supported variables without using real market data."""
+    probe_values = {name: 1.0 for name in ALLOWED_VARIABLES}
+    result = evaluate_formula(formula, probe_values)
+    return {"valid": True, "variables": result["variables"]}
+
+
 def evaluate_formula(formula, values=None):
     """Validate and evaluate a safe boolean strategy expression against numeric inputs."""
     if not isinstance(formula, str) or not formula.strip():
