@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#101827">
+<title>Tradeboot · Market Watch</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1120;--panel:#121c2d;--line:#243249;--muted:#93a4bd;--text:#edf3fc;--green:#35d39a;--red:#ff7385;--amber:#f5c66b}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at top,#15243a 0,var(--bg) 55%);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}
+.wrap{max-width:1120px;margin:auto;padding:24px 18px 48px}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:28px}
+.brand{display:flex;align-items:center;gap:12px}.logo{display:grid;place-items:center;width:46px;height:46px;border:1px solid #314561;border-radius:14px;background:#172840;font-size:22px}.brand h1{font-size:23px;letter-spacing:.2px;margin:0}.brand p{margin:2px 0 0;color:var(--muted);font-size:13px}
+.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}button{border:1px solid #395272;background:#1d3552;color:#fff;padding:10px 15px;border-radius:10px;font-weight:650;cursor:pointer}button:disabled{opacity:.6;cursor:wait}
+.pill{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;padding:6px 10px;color:var(--muted);font-size:12px}.dot{width:8px;height:8px;border-radius:50%;background:var(--amber)}.dot.ok{background:var(--green);box-shadow:0 0 10px #35d39a66}.dot.bad{background:var(--red)}
+.hero{border:1px solid var(--line);border-radius:18px;background:linear-gradient(120deg,#172940,#111a2b);padding:20px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}.eyebrow{color:#9db4d3;text-transform:uppercase;letter-spacing:1.3px;font-size:11px;font-weight:800}.hero h2{font-size:22px;margin:4px 0}.hero p{margin:0;color:var(--muted);font-size:13px}.safe{color:var(--green);border:1px solid #28634f;background:#103328;border-radius:10px;padding:8px 11px;font-size:12px;font-weight:750}
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.card{background:rgba(18,28,45,.94);border:1px solid var(--line);border-radius:16px;padding:18px;min-width:0}.ticker{display:flex;justify-content:space-between;align-items:center;gap:8px}.symbol{font-size:18px;font-weight:800;letter-spacing:.4px}.company{color:var(--muted);font-size:12px;margin-top:1px}.price{font-size:30px;font-weight:760;letter-spacing:-.8px;margin:20px 0 4px;white-space:nowrap}.quality{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:7px}.metrics{display:grid;grid-template-columns:1fr 1fr;gap:12px;border-top:1px solid var(--line);margin-top:17px;padding-top:15px}.metric span{display:block;color:var(--muted);font-size:11px;margin-bottom:3px}.metric strong{font-size:14px;font-variant-numeric:tabular-nums}.tag{font-size:10px;letter-spacing:.5px;font-weight:800;border-radius:6px;padding:4px 7px;background:#213149;color:#bbcee7}.tag.good{background:#12392f;color:#71e4ba}.tag.warn{background:#3d3020;color:#f4cb7b}.tag.bad{background:#412630;color:#ff9aaa}
+.lower{display:grid;grid-template-columns:1.2fr .8fr;gap:14px;margin-top:18px}.panel{background:rgba(18,28,45,.8);border:1px solid var(--line);border-radius:16px;padding:18px}.panel h3{margin:0 0 10px;font-size:15px}.panel p{color:var(--muted);font-size:13px;margin:6px 0}.statusline{display:flex;align-items:center;gap:8px;margin:10px 0;font-size:13px}.error{color:#ff9aaa}.foot{color:#71839d;font-size:11px;margin-top:22px}.empty{color:var(--muted);padding:18px 0}.mono{font-variant-numeric:tabular-nums}
+@media(max-width:760px){.cards{grid-template-columns:1fr}.lower{grid-template-columns:1fr}.price{font-size:34px}.wrap{padding:17px 12px 35px}.hero{padding:16px}.brand h1{font-size:21px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="top">
+  <div class="brand"><div class="logo">↗</div><div><h1>Tradeboot</h1><p>Market Watch · eToro · Solo lectura</p></div></div>
+  <div class="actions"><span class="pill"><span class="dot" id="connection-dot"></span><span id="connection-text">Conectando…</span></span><button id="refresh">Actualizar ahora ↻</button></div>
+</header>
+<section class="hero">
+  <div><div class="eyebrow">Panel de mercado</div><h2>Seguimiento de cotizaciones</h2><p id="updated">Esperando la primera captura de precios…</p></div>
+  <div class="safe">● TRADING DESHABILITADO · READ ONLY</div>
+</section>
+<section class="cards" id="quotes">
+  <article class="card"><div class="ticker"><div><div class="symbol">AAPL</div><div class="company">Apple Inc.</div></div><span class="tag">CARGANDO</span></div><div class="price">—</div><div class="quality">Consultando cotización…</div></article>
+  <article class="card"><div class="ticker"><div><div class="symbol">MSFT</div><div class="company">Microsoft</div></div><span class="tag">CARGANDO</span></div><div class="price">—</div><div class="quality">Consultando cotización…</div></article>
+  <article class="card"><div class="ticker"><div><div class="symbol">NVDA</div><div class="company">NVIDIA</div></div><span class="tag">CARGANDO</span></div><div class="price">—</div><div class="quality">Consultando cotización…</div></article>
+</section>
+<section class="lower">
+  <div class="panel"><h3>Estado de conexión</h3><div class="statusline"><span class="dot" id="api-dot"></span><span id="api-status">Comprobando API…</span></div><p id="quality-summary">La calidad de cada cotización se valida con los datos que informa el proveedor.</p><p>Actualización automática cada 30 segundos mientras esta pantalla esté abierta.</p></div>
+  <div class="panel"><h3>Qué significa el estado</h3><p><span class="tag good">FRESCA Y CONFIRMADA</span> Cotización reciente, mercado abierto y sin retraso indicado.</p><p><span class="tag warn">NO CONFIRMADA</span> No se pudo confirmar toda la metadata de calidad.</p><p><span class="tag bad">ANTIGUA / ERROR</span> Precio antiguo o no disponible; no debe considerarse una cotización en vivo.</p></div>
+</section>
+<div class="foot">Tradeboot · Datos de mercado informativos · Sin ejecución de órdenes. La actualización es periódica, no una garantía de streaming continuo.</div>
+</div>
+<script>
+const symbols=['AAPL','MSFT','NVDA'];
+const names={AAPL:'Apple Inc.',MSFT:'Microsoft',NVDA:'NVIDIA'};
+const $=id=>document.getElementById(id);
+const money=n=>Number.isFinite(n)?n.toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:4}):'—';
+const num=v=>{if(v===null||v===undefined||v==='')return NaN;const n=Number(v);return Number.isFinite(n)?n:NaN};
+function find(row,keys){for(const k of keys){if(row&&row[k]!==undefined&&row[k]!==null&&row[k]!==''){const n=num(row[k]);if(Number.isFinite(n))return n}}return NaN}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function card(r){
+ const sym=r.symbol||'—', rates=r.rates&&r.rates.rates, row=Array.isArray(rates)?rates[0]||{}:{};
+ const bid=find(row,['Bid','bid','BidRate','bidRate','BuyRate','buyRate']), ask=find(row,['Ask','ask','AskRate','askRate','SellRate','sellRate']);
+ const last=find(row,['Rate','rate','Last','last','Price','price','CurrentRate','currentRate']);
+ const mid=Number.isFinite(bid)&&Number.isFinite(ask)?(bid+ask)/2:last;
+ const fresh=r.quote_is_fresh===true, usable=r.quote_is_usable===true;
+ let label=usable?'FRESCA Y CONFIRMADA':fresh?'NO CONFIRMADA':r.ok?'ANTIGUA':'SIN DATOS';
+ let tag=usable?'good':fresh?'warn':'bad';
+ let detail=usable?'Mercado abierto · sin retraso indicado':fresh?'Reciente, pero calidad no confirmada':r.quote_quality_status==='stale'?'Cotización antigua':'No se pudo obtener una cotización';
+ const age=Number.isFinite(num(r.quote_age_seconds))?Math.max(0,Math.floor(num(r.quote_age_seconds)))+' s':'—';
+ const time=r.quote_time?new Date(r.quote_time).toLocaleTimeString('es-CR',{hour12:false}):'—';
+ return '<article class="card"><div class="ticker"><div><div class="symbol">'+escapeHtml(sym)+'</div><div class="company">'+escapeHtml(names[sym]||sym)+'</div></div><span class="tag '+tag+'">'+label+'</span></div><div class="price">'+money(mid)+'</div><div class="quality"><span class="dot '+(usable?'ok':fresh?'':'bad')+'"></span>'+detail+'</div><div class="metrics"><div class="metric"><span>BID / COMPRA</span><strong>'+money(bid)+'</strong></div><div class="metric"><span>ASK / VENTA</span><strong>'+money(ask)+'</strong></div><div class="metric"><span>ANTIGÜEDAD</span><strong>'+age+'</strong></div><div class="metric"><span>HORA DE COTIZACIÓN</span><strong>'+time+'</strong></div></div></article>';
+}
+async function refresh(){
+ const btn=$('refresh');btn.disabled=true;$('connection-text').textContent='Actualizando…';$('connection-dot').className='dot';
+ try{
+   const response=await fetch('/etoro/instrument-stream?symbols='+symbols.join(','),{cache:'no-store'});
+   const data=await response.json();
+   if(!response.ok||!Array.isArray(data.results))throw new Error(data.error||'No se recibieron datos de cotización');
+   const by=Object.fromEntries(data.results.map(r=>[r.symbol,r]));
+   $('quotes').innerHTML=symbols.map(s=>card(by[s]||{symbol:s,ok:false})).join('');
+   const good=symbols.filter(s=>by[s]&&by[s].quote_is_usable===true).length;
+   $('connection-dot').className='dot '+(good===symbols.length?'ok':good?'':'bad');
+   $('connection-text').textContent=good+'/'+symbols.length+' cotizaciones utilizables';
+   $('api-dot').className='dot '+(data.ok?'ok':'bad');
+   $('api-status').textContent=data.ok?'API conectada · respuesta recibida':'API respondió con errores en una o más acciones';
+   $('quality-summary').textContent=good+' de '+symbols.length+' cotizaciones cumplen frescura, mercado abierto y ausencia de retraso según metadata del proveedor.';
+   $('updated').textContent='Última consulta: '+new Date().toLocaleString('es-CR',{hour12:false})+' · Captura puntual de eToro';
+ }catch(e){
+   $('connection-dot').className='dot bad';$('connection-text').textContent='Conexión con error';
+   $('api-dot').className='dot bad';$('api-status').textContent='No se pudo actualizar: '+e.message;
+   $('updated').textContent='Último intento: '+new Date().toLocaleString('es-CR',{hour12:false});
+ }finally{btn.disabled=false}
+}
+$('refresh').addEventListener('click',refresh);refresh();setInterval(refresh,30000);
+</script>
+</body>
+</html>
