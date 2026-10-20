@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from tradeboot import Tradeboot
+from strategy_engine import StrategyFormulaError, evaluate_formula
 
 
 module = Tradeboot()
@@ -519,6 +520,33 @@ class Handler(BaseHTTPRequestHandler):
             status, payload = etoro_get("trading/info/demo/portfolio")
             return self._json(status, payload, head_only)
         return self._json(404, {"error": "not_found"}, head_only)
+
+    def do_POST(self):
+        path = urlsplit(self.path).path
+        if path != "/strategies/validate":
+            return self._json(404, {"ok": False, "error": "not_found"})
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except (TypeError, ValueError):
+            return self._json(400, {"ok": False, "error": "invalid_content_length"})
+        if length < 1 or length > 16384:
+            return self._json(413 if length > 16384 else 400, {
+                "ok": False, "error": "request_body_size_invalid", "max_bytes": 16384,
+            })
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            return self._json(400, {"ok": False, "error": "invalid_json"})
+        if not isinstance(payload, dict) or not isinstance(payload.get("formula"), str):
+            return self._json(400, {"ok": False, "error": "formula_required"})
+        values = payload.get("values", {})
+        if not isinstance(values, dict):
+            return self._json(400, {"ok": False, "error": "values_must_be_object"})
+        try:
+            result = evaluate_formula(payload["formula"], values)
+            return self._json(200, {"ok": True, **result})
+        except StrategyFormulaError as exc:
+            return self._json(400, {"ok": False, "error": "invalid_strategy_formula", "detail": str(exc)})
 
     def do_GET(self):
         self._dispatch()
