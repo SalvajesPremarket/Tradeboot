@@ -63,6 +63,18 @@ def quote_freshness(rates_payload):
 
     row = rate_rows[0]
     quote_time = row.get("date") or row.get("Date")
+    if quote_time is None or not str(quote_time).strip():
+        return {
+            "quote_time": None,
+            "quote_age_seconds": None,
+            "quote_is_fresh": False,
+            "freshness_status": "unknown_timestamp",
+            "market_open": None,
+            "delayed_quote": None,
+            "quote_is_usable": False,
+            "quote_quality_status": "unknown_timestamp",
+            "max_quote_age_seconds": max_age,
+        }
     try:
         parsed_time = datetime.fromisoformat(str(quote_time).replace("Z", "+00:00"))
         if parsed_time.tzinfo is None:
