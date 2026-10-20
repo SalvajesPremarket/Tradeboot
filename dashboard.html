@@ -49,7 +49,7 @@
   </div>
   <form id="strategy-form" class="strategy-form">
     <div class="field"><label for="strategy-name">Nombre de la estrategia</label><input id="strategy-name" maxlength="80" placeholder="Ej. Ruptura de apertura" required></div>
-    <div class="field"><label for="strategy-formula">Fórmula / reglas de la estrategia</label><textarea id="strategy-formula" maxlength="12000" placeholder="Ej. price > 5 and change_pct >= 2. Variables: price, bid, ask, change_pct, gap_pct, volume, rvol. Usa and/or/not en minúsculas." required></textarea></div>
+    <div class="field"><label for="strategy-formula">Fórmula / reglas de la estrategia</label><textarea id="strategy-formula" maxlength="1000" placeholder="Ej. price > 5 and change_pct >= 2. Variables: price, bid, ask, change_pct, gap_pct, volume, rvol. Usa and/or/not en minúsculas." required></textarea></div>
     <div class="field full"><div class="form-actions"><button type="submit" id="strategy-save">＋ Guardar estrategia</button><button type="button" class="secondary" id="strategy-validate">Validar fórmula</button><button type="button" class="secondary" id="strategy-cancel" hidden>Cancelar edición</button><span id="strategy-validation-status" class="status-note" role="status" aria-live="polite"></span></div></div>
   </form>
   <div class="status-note"><strong>Importante:</strong> el validador admite expresiones seguras como <code>price &gt; 5 and change_pct &gt;= 2</code>. Sin conectar el almacenamiento compartido, las estrategias se guardan solo en este navegador. Conectado, se guardan en PostgreSQL. Las fórmulas solo evalúan capturas utilizables en esta pantalla; no envían órdenes. Tradeboot permanece en modo de solo lectura.</div>
@@ -84,7 +84,7 @@ async function persistStrategies(){
   localStorage.setItem(strategyStoreKey,JSON.stringify(strategies));
   status.textContent='Conectado · estrategias guardadas en almacenamiento compartido.';
   renderStrategies();
- }catch(error){status.textContent='Error al sincronizar: '+error.message;cloudMode=false}
+ }catch(error){status.textContent='Error al sincronizar: '+error.message;cloudMode=false;localStorage.setItem(strategyStoreKey,JSON.stringify(strategies))}
 }
 async function connectStrategyStorage(){
  const token=$('strategy-token').value.trim(), status=$('strategy-cloud-status');
