@@ -68,7 +68,10 @@ def _evaluate(node, values):
             raise StrategyFormulaError("Exponent magnitude cannot exceed 8.")
         if isinstance(node.op, (ast.Div, ast.Mod)) and right == 0:
             raise StrategyFormulaError("Division by zero is not allowed.")
-        result = _BINOPS[type(node.op)](left, right)
+        try:
+            result = _BINOPS[type(node.op)](left, right)
+        except (ArithmeticError, ValueError):
+            raise StrategyFormulaError("Arithmetic operation is outside safe numeric limits.") from None
         if not math.isfinite(result):
             raise StrategyFormulaError("Formula result is not finite.")
         return result
