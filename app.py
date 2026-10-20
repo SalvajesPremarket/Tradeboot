@@ -204,18 +204,24 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/health":
             return self._json(200, {"ok": True, "service": "Tradeboot"}, head_only)
         if path == "/":
-            return self._json(200, {
-                "service": "Tradeboot",
-                "status": "standby",
-                "endpoints": [
-                    "/health", "/status", "/watchlist",
-                    "/etoro/watchlist", "/etoro/demo/portfolio",
-                    "/etoro/instrument-search?symbol=AAPL",
-                    "/etoro/instrument-rates?symbol=AAPL",
-                ],
-                "trading_enabled": False,
-                "etoro_mode": "demo_read_only",
-            }, head_only)
+            try:
+                dashboard_path = os.path.join(os.path.dirname(__file__), "dashboard.html")
+                with open(dashboard_path, "rb") as dashboard_file:
+                    body = dashboard_file.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                if not head_only:
+                    self.wfile.write(body)
+                return
+            except OSError:
+                return self._json(500, {
+                    "ok": False,
+                    "error": "dashboard_file_unavailable",
+                    "trading_enabled": False,
+                }, head_only)
         if path in ("/status", "/watchlist"):
             return self._json(200, module.snapshot(), head_only)
         if path == "/etoro/instrument-rates":
