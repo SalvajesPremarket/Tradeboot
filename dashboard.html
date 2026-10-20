@@ -44,7 +44,7 @@
   </div>
   <form id="strategy-form" class="strategy-form">
     <div class="field"><label for="strategy-name">Nombre de la estrategia</label><input id="strategy-name" maxlength="80" placeholder="Ej. Ruptura de apertura" required></div>
-    <div class="field"><label for="strategy-formula">Fórmula / reglas de la estrategia</label><textarea id="strategy-formula" maxlength="12000" placeholder="Ej. price > 5 and change_pct >= 2. Variables: price, bid, ask, change_pct, gap_pct, volume, rvol. Usa AND/OR/NOT en minúsculas." required></textarea></div>
+    <div class="field"><label for="strategy-formula">Fórmula / reglas de la estrategia</label><textarea id="strategy-formula" maxlength="12000" placeholder="Ej. price > 5 and change_pct >= 2. Variables: price, bid, ask, change_pct, gap_pct, volume, rvol. Usa and/or/not en minúsculas." required></textarea></div>
     <div class="field full"><div class="form-actions"><button type="submit" id="strategy-save">＋ Guardar estrategia</button><button type="button" class="secondary" id="strategy-validate">Validar fórmula</button><button type="button" class="secondary" id="strategy-cancel" hidden>Cancelar edición</button><span id="strategy-validation-status" class="status-note" role="status" aria-live="polite"></span></div></div>
   </form>
   <div class="status-note"><strong>Importante:</strong> el validador admite expresiones seguras como <code>price &gt; 5 and change_pct &gt;= 2</code>. Las estrategias todavía se guardan solo en este navegador y no se evalúan automáticamente contra el mercado ni envían órdenes. Tradeboot permanece en modo de solo lectura.</div>
