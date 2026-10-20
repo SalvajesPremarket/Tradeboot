@@ -44,10 +44,10 @@
   </div>
   <form id="strategy-form" class="strategy-form">
     <div class="field"><label for="strategy-name">Nombre de la estrategia</label><input id="strategy-name" maxlength="80" placeholder="Ej. Ruptura de apertura" required></div>
-    <div class="field"><label for="strategy-formula">Fórmula / reglas de la estrategia</label><textarea id="strategy-formula" maxlength="12000" placeholder="Pega aquí tus reglas o fórmula. Por ahora se guarda como texto; aún no se interpreta ni ejecuta como código." required></textarea></div>
-    <div class="field full"><div class="form-actions"><button type="submit" id="strategy-save">＋ Guardar estrategia</button><button type="button" class="secondary" id="strategy-cancel" hidden>Cancelar edición</button></div></div>
+    <div class="field"><label for="strategy-formula">Fórmula / reglas de la estrategia</label><textarea id="strategy-formula" maxlength="12000" placeholder="Ej. price > 5 and change_pct >= 2. Variables: price, bid, ask, change_pct, gap_pct, volume, rvol. Usa AND/OR/NOT en minúsculas." required></textarea></div>
+    <div class="field full"><div class="form-actions"><button type="submit" id="strategy-save">＋ Guardar estrategia</button><button type="button" class="secondary" id="strategy-validate">Validar fórmula</button><button type="button" class="secondary" id="strategy-cancel" hidden>Cancelar edición</button><span id="strategy-validation-status" class="status-note" role="status" aria-live="polite"></span></div></div>
   </form>
-  <div class="status-note"><strong>Importante:</strong> guardar o activar una estrategia solo administra su configuración en este navegador. El motor que interpreta fórmulas y envía órdenes todavía no está conectado. Tradeboot permanece en modo de solo lectura y no realizará operaciones reales.</div>
+  <div class="status-note"><strong>Importante:</strong> el validador admite expresiones seguras como <code>price &gt; 5 and change_pct &gt;= 2</code>. Las estrategias todavía se guardan solo en este navegador y no se evalúan automáticamente contra el mercado ni envían órdenes. Tradeboot permanece en modo de solo lectura.</div>
   <div class="strategy-list" id="strategy-list"><div class="empty-strategies">Todavía no has creado estrategias. Usa el formulario para añadir la primera.</div></div>
 </section>
 
@@ -59,6 +59,7 @@
 </div>
 <script>
 
+const $=id=>document.getElementById(id);
 const strategyStoreKey='tradeboot.strategyConfigs.v1';
 let strategies=[];
 let editingStrategyId=null;
@@ -71,7 +72,7 @@ function renderStrategies(){
  if(!strategies.length){list.innerHTML='<div class="empty-strategies">Todavía no has creado estrategias. Usa el formulario para añadir la primera.</div>';return}
  list.innerHTML=strategies.map(s=>'<article class="strategy-item '+(s.enabled?'enabled':'')+'"><div class="strategy-title"><div><h3>'+escapeHtml(s.name)+'</h3><div class="company">'+(s.enabled?'ACTIVADA · CONFIGURACIÓN':'DESACTIVADA')+'</div></div><span class="tag '+(s.enabled?'good':'warn')+'">'+(s.enabled?'ON':'OFF')+'</span></div><div class="strategy-formula">'+escapeHtml(s.formula)+'</div><div class="strategy-actions"><button type="button" data-action="toggle" data-id="'+escapeHtml(s.id)+'" class="secondary">'+(s.enabled?'Desactivar':'Activar')+'</button><button type="button" data-action="edit" data-id="'+escapeHtml(s.id)+'" class="secondary">Editar</button><button type="button" data-action="delete" data-id="'+escapeHtml(s.id)+'" class="danger">Borrar</button></div></article>').join('');
 }
-function resetStrategyForm(){editingStrategyId=null;$('strategy-form').reset();$('strategy-save').textContent='＋ Guardar estrategia';$('strategy-cancel').hidden=true}
+function resetStrategyForm(){editingStrategyId=null;$('strategy-form').reset();$('strategy-save').textContent='＋ Guardar estrategia';$('strategy-cancel').hidden=true;$('strategy-validation-status').textContent=''}
 $('strategy-form').addEventListener('submit',event=>{
  event.preventDefault();
  const name=strategyName.value.trim(),formula=strategyFormula.value.trim();
@@ -79,6 +80,17 @@ $('strategy-form').addEventListener('submit',event=>{
  if(editingStrategyId){const item=strategies.find(s=>s.id===editingStrategyId);if(item){item.name=name;item.formula=formula}}
  else{strategies.push({id:(typeof crypto!=='undefined'&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2),name,formula,enabled:false,createdAt:new Date().toISOString()})}
  try{persistStrategies();renderStrategies();resetStrategyForm()}catch(_){alert('No se pudo guardar en el almacenamiento local de este navegador.')}
+});
+$('strategy-validate').addEventListener('click',async()=>{
+ const formula=strategyFormula.value.trim(), status=$('strategy-validation-status');
+ if(!formula){status.textContent='Pega una fórmula antes de validarla.';return}
+ status.textContent='Validando…';
+ try{
+  const response=await fetch('/strategies/validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({formula,validate_only:true}),cache:'no-store'});
+  const data=await response.json();
+  if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'No se pudo validar');
+  status.textContent='Fórmula válida · variables: '+(data.variables.length?data.variables.join(', '):'ninguna');
+ }catch(error){status.textContent='Fórmula no válida: '+error.message}
 });
 $('strategy-cancel').addEventListener('click',resetStrategyForm);
 $('strategy-list').addEventListener('click',event=>{
@@ -92,7 +104,6 @@ loadStrategies();renderStrategies();
 
 const symbols=['AAPL','MSFT','NVDA'];
 const names={AAPL:'Apple Inc.',MSFT:'Microsoft',NVDA:'NVIDIA'};
-const $=id=>document.getElementById(id);
 const money=n=>Number.isFinite(n)?n.toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:4}):'—';
 const num=v=>{if(v===null||v===undefined||v==='')return NaN;const n=Number(v);return Number.isFinite(n)?n:NaN};
 function find(row,keys){for(const k of keys){if(row&&row[k]!==undefined&&row[k]!==null&&row[k]!==''){const n=num(row[k]);if(Number.isFinite(n))return n}}return NaN}
