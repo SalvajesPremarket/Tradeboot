@@ -63,6 +63,7 @@ const $=id=>document.getElementById(id);
 const strategyStoreKey='tradeboot.strategyConfigs.v1';
 let strategies=[];
 let editingStrategyId=null;
+const strategyEvaluationResults={};
 const strategyName=$('strategy-name'), strategyFormula=$('strategy-formula');
 function loadStrategies(){try{const parsed=JSON.parse(localStorage.getItem(strategyStoreKey)||'[]');strategies=Array.isArray(parsed)?parsed.filter(s=>s&&typeof s.id==='string'&&typeof s.name==='string'&&typeof s.formula==='string'):[]}catch(_){strategies=[]}}
 function persistStrategies(){localStorage.setItem(strategyStoreKey,JSON.stringify(strategies))}
@@ -70,7 +71,46 @@ function renderStrategies(){
  $('strategy-count').textContent=strategies.length+' estrategia'+(strategies.length===1?'':'s');
  const list=$('strategy-list');
  if(!strategies.length){list.innerHTML='<div class="empty-strategies">Todavía no has creado estrategias. Usa el formulario para añadir la primera.</div>';return}
- list.innerHTML=strategies.map(s=>'<article class="strategy-item '+(s.enabled?'enabled':'')+'"><div class="strategy-title"><div><h3>'+escapeHtml(s.name)+'</h3><div class="company">'+(s.enabled?'ACTIVADA · CONFIGURACIÓN':'DESACTIVADA')+'</div></div><span class="tag '+(s.enabled?'good':'warn')+'">'+(s.enabled?'ON':'OFF')+'</span></div><div class="strategy-formula">'+escapeHtml(s.formula)+'</div><div class="strategy-actions"><button type="button" data-action="toggle" data-id="'+escapeHtml(s.id)+'" class="secondary">'+(s.enabled?'Desactivar':'Activar')+'</button><button type="button" data-action="edit" data-id="'+escapeHtml(s.id)+'" class="secondary">Editar</button><button type="button" data-action="delete" data-id="'+escapeHtml(s.id)+'" class="danger">Borrar</button></div></article>').join('');
+ list.innerHTML=strategies.map(s=>'<article class="strategy-item '+(s.enabled?'enabled':'')+'"><div class="strategy-title"><div><h3>'+escapeHtml(s.name)+'</h3><div class="company">'+(s.enabled?'ACTIVADA · CONFIGURACIÓN':'DESACTIVADA')+'</div></div><span class="tag '+(s.enabled?'good':'warn')+'">'+(s.enabled?'ON':'OFF')+'</span></div><div class="strategy-formula">'+escapeHtml(s.formula)+'</div><div class="status-note">'+escapeHtml(strategyEvaluationResults[s.id]||(s.enabled?"Esperando evaluación de cotizaciones utilizables.":"Activa la estrategia para evaluar condiciones."))+'</div><div class="strategy-actions"><button type="button" data-action="toggle" data-id="'+escapeHtml(s.id)+'" class="secondary">'+(s.enabled?'Desactivar':'Activar')+'</button><button type="button" data-action="edit" data-id="'+escapeHtml(s.id)+'" class="secondary">Editar</button><button type="button" data-action="delete" data-id="'+escapeHtml(s.id)+'" class="danger">Borrar</button></div></article>').join('');
+}
+async function evaluateActiveStrategies(resultsBySymbol){
+ const active=strategies.filter(s=>s.enabled);
+ if(!active.length)return;
+ const usable=Object.values(resultsBySymbol||{}).filter(r=>r&&r.ok&&r.quote_is_usable===true);
+ for(const s of active)strategyEvaluationResults[s.id]='Evaluando condiciones…';
+ renderStrategies();
+ await Promise.all(active.map(async s=>{
+  if(!usable.length){strategyEvaluationResults[s.id]='Sin evaluación: no hay cotizaciones confirmadas como utilizables.';return}
+  const matched=[],errors=[];
+  for(const quote of usable){
+   const rates=quote.rates&&quote.rates.rates;
+   const row=Array.isArray(rates)?rates[0]||{}:{};
+   const bid=find(row,['Bid','bid','BidRate','bidRate','BuyRate','buyRate']);
+   const ask=find(row,['Ask','ask','AskRate','askRate','SellRate','sellRate']);
+   const last=find(row,['Rate','rate','Last','last','Price','price','CurrentRate','currentRate']);
+   const price=Number.isFinite(bid)&&Number.isFinite(ask)?(bid+ask)/2:last;
+   const values={};
+   if(Number.isFinite(price))values.price=price;
+   if(Number.isFinite(bid))values.bid=bid;
+   if(Number.isFinite(ask))values.ask=ask;
+   const optional={
+    change_pct:['ChangePct','changePct','change_pct','ChangePercent','changePercent'],
+    gap_pct:['GapPct','gapPct','gap_pct'],
+    volume:['Volume','volume','DailyVolume','dailyVolume'],
+    rvol:['Rvol','rvol','RelativeVolume','relativeVolume']
+   };
+   for(const [key,fields] of Object.entries(optional)){const n=find(row,fields);if(Number.isFinite(n))values[key]=n}
+   try{
+    const response=await fetch('/strategies/validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({formula:s.formula,values}),cache:'no-store'});
+    const data=await response.json();
+    if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'fórmula inválida');
+    if(data.matched)matched.push(quote.symbol);
+   }catch(error){errors.push(quote.symbol+': '+error.message)}
+  }
+  if(errors.length)strategyEvaluationResults[s.id]='No evaluada por completo · '+errors.join(' | ');
+  else strategyEvaluationResults[s.id]=matched.length?'CONDICIÓN CUMPLIDA: '+matched.join(', '):'Sin coincidencias en las cotizaciones confirmadas.';
+ }));
+ renderStrategies();
 }
 function resetStrategyForm(){editingStrategyId=null;$('strategy-form').reset();$('strategy-save').textContent='＋ Guardar estrategia';$('strategy-cancel').hidden=true;$('strategy-validation-status').textContent=''}
 $('strategy-form').addEventListener('submit',event=>{
@@ -128,6 +168,7 @@ async function refresh(){
    const data=await response.json();
    if(!response.ok||!Array.isArray(data.results))throw new Error(data.error||'No se recibieron datos de cotización');
    const by=Object.fromEntries(data.results.map(r=>[r.symbol,r]));
+   await evaluateActiveStrategies(by);
    $('quotes').innerHTML=symbols.map(s=>card(by[s]||{symbol:s,ok:false})).join('');
    const good=symbols.filter(s=>by[s]&&by[s].quote_is_usable===true).length;
    $('connection-dot').className='dot '+(good===symbols.length?'ok':good?'':'bad');
