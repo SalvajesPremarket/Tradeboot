@@ -181,7 +181,7 @@ async function evaluateActiveStrategies(resultsBySymbol){
  }));
  renderStrategies();
 }
-function resetStrategyForm(){editingStrategyId=null;$('strategy-form').reset();strategyAllocation.value='10';updateBudgetPreview();$('strategy-save').textContent='＋ Guardar estrategia';$('strategy-cancel').hidden=true;$('strategy-validation-status').textContent=''}
+function resetStrategyForm(){editingStrategyId=null;$('strategy-form').reset();validatedProgramText='';strategyType.dispatchEvent(new Event('change'));strategyAllocation.value='10';updateBudgetPreview();$('strategy-save').textContent='＋ Guardar estrategia';$('strategy-cancel').hidden=true;$('strategy-validation-status').textContent=''}
 $('strategy-form').addEventListener('submit',event=>{
  event.preventDefault();
  const name=strategyName.value.trim(),formula=strategyFormula.value,strategyTypeValue=strategyType.value,allocationPercent=Number(strategyAllocation.value);
