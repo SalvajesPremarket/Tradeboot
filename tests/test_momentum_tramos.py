@@ -52,6 +52,27 @@ class MomentumTramosTests(unittest.TestCase):
         self.assertEqual(action["action"], "MOVE_STOP")
         self.assertEqual(bot.pos["stop"], 2.0)
 
+    def test_long_entry_signal_after_adverse_dip_and_return_to_open(self):
+        bot = MomentumTrader("ABCD", "LONG", {
+            "use_scanner_filters": False,
+            "max_prior_streak": 100,
+            "min_dip_pct": 0.05,
+        })
+        historical = [{"open": 2.0, "high": 2.0, "low": 2.0, "close": 2.0}
+                      for _ in range(200)]
+        historical += [{"open": 2.0 + i * 0.01, "high": 2.0 + i * 0.01,
+                        "low": 2.0 + i * 0.01, "close": 2.0 + i * 0.01}
+                       for i in range(1, 21)]
+        bot.seed(historical)
+        start = datetime(2026, 1, 1, 9, 30)
+        bot.on_tick(2.2, start)
+        bot.on_tick(2.197, start.replace(second=5))
+        actions = bot.on_tick(2.2, start.replace(second=10))
+        self.assertEqual([a["action"] for a in actions], ["ENTER"])
+        self.assertEqual(actions[0]["side"], "LONG")
+        self.assertGreater(actions[0]["stop"], 0)
+        self.assertLess(actions[0]["stop"], actions[0]["price"])
+
 
 if __name__ == "__main__":
     unittest.main()
