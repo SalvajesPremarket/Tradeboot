@@ -101,7 +101,7 @@ def replace_strategies(items):
             conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS strategy_type TEXT NOT NULL DEFAULT 'formula'")
             conn.execute("DELETE FROM tradeboot_strategies")
             if normalized:
-                conn.executemany("""
+                conn.cursor().executemany("""
                     INSERT INTO tradeboot_strategies
                     (id, name, formula, strategy_type, enabled, allocation_percent, created_at, updated_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
