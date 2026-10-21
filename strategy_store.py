@@ -83,6 +83,8 @@ def replace_strategies(items):
         except (ValueError, OverflowError):
             created_at = now
         normalized.append((sid, name.strip(), formula, strategy_type, enabled, float(allocation_percent), created_at, now))
+    if sum(1 for row in normalized if row[4]) > 1:
+        raise ValueError("Solo puedes activar una estrategia a la vez. Desactiva la actual antes de activar otra.")
     if len(normalized) > 1000:
         raise ValueError("A maximum of 1000 strategies is supported.")
     with _connect() as conn:
