@@ -686,8 +686,6 @@ class Handler(BaseHTTPRequestHandler):
                 strategy = strategies[0]
                 if strategy.get("strategyType") != "formula":
                     return self._json(409, {"ok": False, "error": "python_program_engine_not_supported"})
-                if side.upper() == "SHORT":
-                    return self._json(409, {"ok": False, "error": "short_execution_not_enabled_until_transaction_schema_is_verified"})
                 status, market = fetch_market_context(symbol)
                 if status != 200 or not market.get("ok"):
                     return self._json(502, {"ok": False, "error": "market_context_unavailable", "market": market})
@@ -705,10 +703,10 @@ class Handler(BaseHTTPRequestHandler):
                         "ok": True, "mode": "demo", "executed": False, "reason": "signal_not_matched",
                         "strategy": strategy.get("name"), "symbol": symbol, "evaluation": evaluation,
                     })
-                result = open_market_order(market["instrument_id"], float(amount), True)
+                result = open_market_order(market["instrument_id"], float(amount), side.upper() == "LONG")
                 return self._json(200, {
                     "ok": True, "mode": "demo", "executed": True,
-                    "strategy": strategy.get("name"), "symbol": symbol, "side": "LONG",
+                    "strategy": strategy.get("name"), "symbol": symbol, "side": side.upper(),
                     "evaluation": evaluation, "execution": result,
                 })
             except StrategyStoreUnavailable as exc:
