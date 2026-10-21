@@ -55,6 +55,27 @@ class EtoroExecutionTests(unittest.TestCase):
             "leverage": 1, "stopLossRate": 9.5,
         })
 
+    def test_short_order_uses_sell_short_transaction(self):
+        seen = {}
+
+        class Response:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                return False
+            def read(self, _):
+                return b'{"orderId":43}'
+
+        def fake_urlopen(request, timeout):
+            seen["body"] = json.loads(request.data.decode())
+            return Response()
+
+        with patch.object(execution, "urlopen", fake_urlopen):
+            result = execution.open_market_order(123, 25, False)
+        self.assertTrue(result["ok"])
+        self.assertEqual(seen["body"]["transaction"], "sellShort")
+
     def test_demo_reuses_existing_etoro_user_key(self):
         os.environ.pop("ETORO_DEMO_USER_KEY", None)
         os.environ["ETORO_USER_KEY"] = "existing-render-user-key"
