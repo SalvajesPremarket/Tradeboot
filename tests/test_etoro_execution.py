@@ -111,7 +111,7 @@ class EtoroExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(execution.EtoroExecutionError, "demo_mode_required"):
             execution.open_market_order(123, 10, True)
 
-    def test_close_uses_position_id_and_demo_path(self):
+    def test_close_uses_documented_demo_v1_path_and_instrument_id(self):
         seen = {}
 
         class Response:
@@ -121,18 +121,48 @@ class EtoroExecutionTests(unittest.TestCase):
             def __exit__(self, *_):
                 return False
             def read(self, _):
-                return b'{"accepted":true}'
+                return b'{"orderId":987}'
 
         def fake_urlopen(request, timeout):
             seen["url"] = request.full_url
             seen["body"] = json.loads(request.data.decode())
+            seen["method"] = request.get_method()
             return Response()
 
         with patch.object(execution, "urlopen", fake_urlopen):
-            result = execution.close_market_position(4567)
+            result = execution.close_demo_position(4567, 123)
         self.assertTrue(result["ok"])
-        self.assertTrue(seen["url"].endswith("/api/v2/trading/execution/demo/orders"))
-        self.assertEqual(seen["body"], {"action": "close", "positionId": 4567})
+        self.assertTrue(seen["url"].endswith("/api/v1/trading/execution/demo/market-close-orders/positions/4567"))
+        self.assertEqual(seen["method"], "POST")
+        self.assertEqual(seen["body"], {"InstrumentID": 123, "UnitsToDeduct": None})
+        self.assertTrue(result["confirmation_required"])
+
+    def test_legacy_close_without_instrument_id_fails_closed(self):
+        with self.assertRaisesRegex(execution.EtoroExecutionError, "close_requires_instrument_id"):
+            execution.close_market_position(4567)
+
+    def test_demo_portfolio_is_read_only(self):
+        seen = {}
+
+        class Response:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                return False
+            def read(self, _):
+                return b'{"clientPortfolio":{}}'
+
+        def fake_urlopen(request, timeout):
+            seen["url"] = request.full_url
+            seen["method"] = request.get_method()
+            return Response()
+
+        with patch.object(execution, "urlopen", fake_urlopen):
+            result = execution.get_demo_portfolio()
+        self.assertTrue(result["ok"])
+        self.assertEqual(seen["method"], "GET")
+        self.assertTrue(seen["url"].endswith("/api/v1/trading/info/demo/portfolio"))
 
 
 if __name__ == "__main__":
