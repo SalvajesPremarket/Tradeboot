@@ -1,7 +1,8 @@
-"""Read-only HTTP interface for the isolated Tradeboot scaffold.
+"""HTTP interface for Tradeboot market data, strategy management, and guarded Demo execution.
 
-eToro requests are restricted to GET endpoints and use credentials from environment
-variables. No order placement or account-changing requests are implemented.
+Market-data routes are read-only. Order placement is limited to the authenticated
+Demo evaluation route and remains disabled unless explicitly enabled by environment
+configuration. This service does not run a continuous autonomous trading loop.
 """
 import json
 import os
