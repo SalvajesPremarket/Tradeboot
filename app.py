@@ -323,6 +323,50 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/health":
             return self._json(200, {"ok": True, "service": "Tradeboot"}, head_only)
+        if path == "/_diagnostics/strategy-store":
+            # Temporary, read-only diagnostic: never returns credentials or strategy data.
+            database_url_configured = bool(os.environ.get("DATABASE_URL", "").strip())
+            driver_available = False
+            connection_ok = False
+            tables_exist = {"tradeboot_strategies": False, "tradeboot_strategy_settings": False}
+            read_query_ok = False
+            error = None
+            if database_url_configured:
+                try:
+                    import psycopg
+                    driver_available = True
+                except ImportError:
+                    error = "postgres_driver_not_installed"
+                if driver_available:
+                    try:
+                        with psycopg.connect(
+                            os.environ["DATABASE_URL"].strip(),
+                            connect_timeout=5,
+                            autocommit=True,
+                            sslmode="require",
+                        ) as conn:
+                            connection_ok = True
+                            conn.execute("SELECT 1").fetchone()
+                            read_query_ok = True
+                            rows = conn.execute(
+                                "SELECT table_name FROM information_schema.tables "
+                                "WHERE table_schema = current_schema() AND table_name = ANY(%s)",
+                                (["tradeboot_strategies", "tradeboot_strategy_settings"],),
+                            ).fetchall()
+                            found = {row[0] for row in rows}
+                            tables_exist = {name: name in found for name in tables_exist}
+                    except Exception:
+                        error = "database_connection_or_read_failed"
+            return self._json(200, {
+                "ok": database_url_configured and driver_available and connection_ok and read_query_ok,
+                "database_url_configured": database_url_configured,
+                "postgres_driver_available": driver_available,
+                "database_connection_ok": connection_ok,
+                "read_query_ok": read_query_ok,
+                "tables_exist": tables_exist,
+                "error": error,
+                "note": "Temporary diagnostic; no strategy rows or credentials returned.",
+            }, head_only)
         if path == "/":
             try:
                 dashboard_path = os.path.join(os.path.dirname(__file__), "dashboard.html")
