@@ -230,7 +230,12 @@ $('strategy-list').addEventListener('click',async event=>{
   renderStrategies();
   return;
  }
- if(button.dataset.action==='toggle'&&(item.strategyType||'formula')==='formula'){item.enabled=!item.enabled;persistStrategies();renderStrategies()}
+ if(button.dataset.action==='toggle'&&(item.strategyType||'formula')==='formula'){
+  const nextEnabled=!item.enabled;
+  if(nextEnabled)strategies.forEach(s=>{s.enabled=false});
+  item.enabled=nextEnabled;
+  persistStrategies();renderStrategies();
+ }
  if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;strategyType.value=item.strategyType||'formula';strategyType.dispatchEvent(new Event('change'));strategyAllocation.value=String(item.allocationPercent??10);updateBudgetPreview();$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
  if(button.dataset.action==='delete'){if(!confirm('¿Borrar la estrategia «'+item.name+'»?'))return;strategies=strategies.filter(s=>s.id!==item.id);if(editingStrategyId===item.id)resetStrategyForm();persistStrategies();renderStrategies()}
 });
