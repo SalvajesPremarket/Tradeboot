@@ -55,6 +55,31 @@ class EtoroExecutionTests(unittest.TestCase):
             "leverage": 1, "stopLossRate": 9.5,
         })
 
+    def test_demo_reuses_existing_etoro_user_key(self):
+        os.environ.pop("ETORO_DEMO_USER_KEY", None)
+        os.environ["ETORO_USER_KEY"] = "existing-render-user-key"
+        seen = {}
+
+        class Response:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                return False
+            def read(self, _):
+                return b'{"orderId":42}'
+
+        def fake_urlopen(request, timeout):
+            seen["user_key"] = request.get_header("X-user-key")
+            seen["url"] = request.full_url
+            return Response()
+
+        with patch.object(execution, "urlopen", fake_urlopen):
+            result = execution.open_market_order(123, 25, True)
+        self.assertTrue(result["ok"])
+        self.assertEqual(seen["user_key"], "existing-render-user-key")
+        self.assertIn("/api/v2/trading/execution/demo/orders", seen["url"])
+
     def test_order_above_cap_is_rejected(self):
         with self.assertRaisesRegex(execution.EtoroExecutionError, "order_amount_outside_configured_limit"):
             execution.open_market_order(123, 101, True)
