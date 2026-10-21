@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from tradeboot import Tradeboot
 from strategy_engine import StrategyFormulaError, evaluate_formula, validate_formula
 from strategy_program import validate_strategy_source
+from strategy_simulation import simulate_momentum
 from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital
 
 
@@ -643,7 +644,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        if path not in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market"):
+        if path not in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market", "/strategies/simulate-momentum"):
             return self._json(404, {"ok": False, "error": "not_found"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -657,7 +658,16 @@ class Handler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
         except (UnicodeError, json.JSONDecodeError):
             return self._json(400, {"ok": False, "error": "invalid_json"})
-        if not isinstance(payload, dict) or not isinstance(payload.get("formula"), str):
+        if not isinstance(payload, dict):
+            return self._json(400, {"ok": False, "error": "json_object_required"})
+        if path == "/strategies/simulate-momentum":
+            if not self._strategy_admin_authorized():
+                return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
+            try:
+                return self._json(200, simulate_momentum(payload))
+            except (TypeError, ValueError) as exc:
+                return self._json(400, {"ok": False, "error": "invalid_simulation_request", "detail": str(exc)})
+        if not isinstance(payload.get("formula"), str):
             return self._json(400, {"ok": False, "error": "formula_required"})
         if path == "/strategies/validate-program":
             try:
