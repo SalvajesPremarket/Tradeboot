@@ -32,6 +32,8 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 - `GET /etoro/demo/portfolio` — consulta de cartera demo.
 - `POST /strategies/validate` — validar o evaluar una fórmula con los valores recibidos.
 - `POST /strategies/evaluate-market` — evaluar una fórmula con una cotización eToro que cumpla los controles de calidad.
+- `POST /strategies/validate-program` — validar la sintaxis de un programa Python completo sin ejecutarlo.
+- `POST /strategies/simulate-momentum` — probar el motor integrado Momentum Tramos con velas/ticks sintéticos o históricos; requiere `X-Strategy-Admin-Token`, procesa como máximo 5.000 velas y 5.000 ticks, y solo emite señales simuladas.
 
 ## Campos de calidad
 
@@ -56,13 +58,21 @@ python app.py
 
 La API escucha en `http://localhost:10000` por defecto; puede cambiarse con `PORT`.
 
+## Motor Momentum Tramos en la rama de trabajo
+
+- `momentum_tramos.py` contiene la implementación revisada del motor; `strategy_simulation.py` ofrece un adaptador de simulación acotado.
+- El dashboard muestra **Probar motor (simulación)** para una estrategia Python cuyo nombre incluya `Momentum Tramos`. La prueba utiliza datos sintéticos y requiere almacenamiento compartido conectado.
+- Los programas Python guardados no se ejecutan como código arbitrario. La simulación invoca únicamente el motor integrado revisado.
+- La rama de trabajo aún debe pasar revisión antes de incorporarse a `main`; no se ha desplegado esta integración en Render.
+
 ## Pendiente antes de considerar listo para producción
 
 1. Ejecutar pruebas automatizadas y comprobar los endpoints desplegados.
-2. Validar snapshots durante mercado abierto y cerrado, y verificar cómo reporta eToro cotizaciones retrasadas.
-3. Confirmar que las variables de entorno de eToro están configuradas y que las cotizaciones reales llegan correctamente.
-4. Confirmar si se necesita persistencia compartida y configurar/verificar el token y la base de datos.
-5. Implementar un consumidor WebSocket continuo si se requiere actualización en tiempo real.
-6. Definir persistencia, monitoreo, límites de riesgo y requisitos de operación antes de diseñar cualquier ejecución de trading.
+2. Validar entradas, salidas, stops y filtros con más escenarios LONG/SHORT y datos faltantes.
+3. Validar snapshots durante mercado abierto y cerrado, y verificar cómo reporta eToro cotizaciones retrasadas.
+4. Confirmar que las variables de entorno de eToro están configuradas y que las cotizaciones reales llegan correctamente.
+5. Confirmar si se necesita persistencia compartida y configurar/verificar el token y la base de datos.
+6. Implementar un consumidor WebSocket continuo si se requiere actualización en tiempo real.
+7. Definir persistencia, monitoreo, límites de riesgo y requisitos de operación antes de diseñar cualquier ejecución de trading.
 
 **Seguridad:** Tradeboot permanece en modo de solo lectura. No habilitar trading automático a partir de las pruebas de datos de mercado.
