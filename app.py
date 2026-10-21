@@ -19,6 +19,7 @@ from strategy_engine import StrategyFormulaError, evaluate_formula, validate_for
 from strategy_program import validate_strategy_source
 from strategy_simulation import simulate_momentum
 from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital
+from etoro_execution import EtoroExecutionError, open_market_order
 
 
 module = Tradeboot()
@@ -644,7 +645,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        if path not in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market", "/strategies/simulate-momentum"):
+        if path not in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market", "/strategies/simulate-momentum", "/engine/demo-evaluate"):
             return self._json(404, {"ok": False, "error": "not_found"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -660,6 +661,64 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "invalid_json"})
         if not isinstance(payload, dict):
             return self._json(400, {"ok": False, "error": "json_object_required"})
+        if path == "/engine/demo-evaluate":
+            if not self._strategy_admin_authorized():
+                return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
+            if os.environ.get("ETORO_TRADING_MODE", "disabled").strip().lower() != "demo":
+                return self._json(409, {"ok": False, "error": "demo_mode_required"})
+            symbol = payload.get("symbol")
+            side = payload.get("side")
+            amount = payload.get("amountUsd")
+            allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_"
+            if not isinstance(symbol, str):
+                return self._json(400, {"ok": False, "error": "symbol_required"})
+            symbol = symbol.strip().upper()
+            if not symbol or len(symbol) > 20 or any(char not in allowed for char in symbol):
+                return self._json(400, {"ok": False, "error": "invalid_symbol"})
+            if not isinstance(side, str) or side.upper() not in ("LONG", "SHORT"):
+                return self._json(400, {"ok": False, "error": "side_must_be_LONG_or_SHORT"})
+            if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount <= 0:
+                return self._json(400, {"ok": False, "error": "positive_amountUsd_required"})
+            try:
+                strategies = [item for item in list_strategies() if item.get("enabled")]
+                if len(strategies) != 1:
+                    return self._json(409, {"ok": False, "error": "exactly_one_enabled_strategy_required"})
+                strategy = strategies[0]
+                if strategy.get("strategyType") != "formula":
+                    return self._json(409, {"ok": False, "error": "python_program_engine_not_supported"})
+                if side.upper() == "SHORT":
+                    return self._json(409, {"ok": False, "error": "short_execution_not_enabled_until_transaction_schema_is_verified"})
+                status, market = fetch_market_context(symbol)
+                if status != 200 or not market.get("ok"):
+                    return self._json(502, {"ok": False, "error": "market_context_unavailable", "market": market})
+                if not market.get("quote_is_usable"):
+                    return self._json(409, {
+                        "ok": False, "error": "quote_not_usable",
+                        "market": {key: market.get(key) for key in (
+                            "symbol", "quote_time", "quote_age_seconds", "quote_is_fresh",
+                            "market_open", "delayed_quote", "quote_is_usable", "quote_quality_status",
+                        )},
+                    })
+                evaluation = evaluate_formula(strategy["formula"], market.get("market_values", {}))
+                if not evaluation.get("matched"):
+                    return self._json(200, {
+                        "ok": True, "mode": "demo", "executed": False, "reason": "signal_not_matched",
+                        "strategy": strategy.get("name"), "symbol": symbol, "evaluation": evaluation,
+                    })
+                result = open_market_order(market["instrument_id"], float(amount), True)
+                return self._json(200, {
+                    "ok": True, "mode": "demo", "executed": True,
+                    "strategy": strategy.get("name"), "symbol": symbol, "side": "LONG",
+                    "evaluation": evaluation, "execution": result,
+                })
+            except StrategyStoreUnavailable as exc:
+                return self._json(503, {"ok": False, "error": str(exc)})
+            except StrategyFormulaError as exc:
+                return self._json(422, {"ok": False, "error": "strategy_data_unavailable", "detail": str(exc)})
+            except EtoroExecutionError as exc:
+                return self._json(502, {"ok": False, "error": str(exc)})
+            except (TypeError, ValueError, OverflowError):
+                return self._json(400, {"ok": False, "error": "invalid_engine_request"})
         if path == "/strategies/simulate-momentum":
             if not self._strategy_admin_authorized():
                 return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
