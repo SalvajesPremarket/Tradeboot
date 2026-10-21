@@ -72,6 +72,8 @@ def replace_strategies(items):
             raise ValueError("Strategy source must contain 1 to 50000 characters.")
         if not isinstance(enabled, bool):
             raise ValueError("Strategy enabled flag must be boolean.")
+        if strategy_type == "python_program" and enabled:
+            raise ValueError("Complete Python programs cannot be activated before their dedicated engine is integrated.")
         if isinstance(allocation_percent, bool) or not isinstance(allocation_percent, (int, float)) or not 0 <= allocation_percent <= 100:
             raise ValueError("Strategy allocation percentage must be between 0 and 100.")
         try:
