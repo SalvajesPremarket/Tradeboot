@@ -355,14 +355,27 @@ class Handler(BaseHTTPRequestHandler):
                             ).fetchall()
                             found = {row[0] for row in rows}
                             tables_exist = {name: name in found for name in tables_exist}
+                            strategy_rows_readable = False
+                            settings_rows_readable = False
+                            if tables_exist["tradeboot_strategies"]:
+                                conn.execute("SELECT COUNT(*) FROM tradeboot_strategies").fetchone()
+                                strategy_rows_readable = True
+                            if tables_exist["tradeboot_strategy_settings"]:
+                                conn.execute("SELECT COUNT(*) FROM tradeboot_strategy_settings").fetchone()
+                                settings_rows_readable = True
                     except Exception:
                         error = "database_connection_or_read_failed"
+            else:
+                strategy_rows_readable = False
+                settings_rows_readable = False
             return self._json(200, {
                 "ok": database_url_configured and driver_available and connection_ok and read_query_ok,
                 "database_url_configured": database_url_configured,
                 "postgres_driver_available": driver_available,
                 "database_connection_ok": connection_ok,
                 "read_query_ok": read_query_ok,
+                "strategy_rows_readable": strategy_rows_readable,
+                "settings_rows_readable": settings_rows_readable,
                 "tables_exist": tables_exist,
                 "error": error,
                 "note": "Temporary diagnostic; no strategy rows or credentials returned.",
