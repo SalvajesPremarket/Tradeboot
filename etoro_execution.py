@@ -33,8 +33,12 @@ def _configuration() -> tuple[str, str, str, float]:
     if not _truthy("ETORO_TRADING_ENABLED"):
         raise EtoroExecutionError("trading_disabled")
     api_key = os.environ.get("ETORO_API_KEY", "").strip()
-    user_key_name = "ETORO_DEMO_USER_KEY" if mode == "demo" else "ETORO_REAL_USER_KEY"
+    # Reuse the existing Render credential for Demo; do not require duplicate secret setup.
+    # Real trading deliberately requires a separately configured real-account key.
+    user_key_name = "ETORO_REAL_USER_KEY" if mode == "real" else "ETORO_DEMO_USER_KEY"
     user_key = os.environ.get(user_key_name, "").strip()
+    if mode == "demo" and not user_key:
+        user_key = os.environ.get("ETORO_USER_KEY", "").strip()
     if not api_key or not user_key:
         raise EtoroExecutionError("mode_specific_etoro_credentials_not_configured")
     if mode == "real":
