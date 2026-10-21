@@ -33,9 +33,10 @@ def _configuration() -> tuple[str, str, str, float]:
     if not _truthy("ETORO_TRADING_ENABLED"):
         raise EtoroExecutionError("trading_disabled")
     api_key = os.environ.get("ETORO_API_KEY", "").strip()
-    user_key = os.environ.get("ETORO_USER_KEY", "").strip()
+    user_key_name = "ETORO_DEMO_USER_KEY" if mode == "demo" else "ETORO_REAL_USER_KEY"
+    user_key = os.environ.get(user_key_name, "").strip()
     if not api_key or not user_key:
-        raise EtoroExecutionError("etoro_credentials_not_configured")
+        raise EtoroExecutionError("mode_specific_etoro_credentials_not_configured")
     if mode == "real":
         if os.environ.get("ETORO_LIVE_TRADING_ACK", "").strip() != LIVE_ACK:
             raise EtoroExecutionError("live_trading_acknowledgement_required")
