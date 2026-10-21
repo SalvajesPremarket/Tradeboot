@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 from tradeboot import Tradeboot
 from strategy_engine import StrategyFormulaError, evaluate_formula, validate_formula
+from strategy_program import validate_strategy_source
 from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital
 
 
@@ -642,7 +643,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        if path not in ("/strategies/validate", "/strategies/evaluate-market"):
+        if path not in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market"):
             return self._json(404, {"ok": False, "error": "not_found"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -658,6 +659,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "invalid_json"})
         if not isinstance(payload, dict) or not isinstance(payload.get("formula"), str):
             return self._json(400, {"ok": False, "error": "formula_required"})
+        if path == "/strategies/validate-program":
+            try:
+                result = validate_strategy_source(payload["formula"])
+                return self._json(200, {"ok": True, **result})
+            except StrategyFormulaError as exc:
+                return self._json(400, {"ok": False, "error": "invalid_strategy_program", "detail": str(exc)})
+
         if path == "/strategies/evaluate-market":
             symbol = payload.get("symbol")
             allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_"
@@ -755,8 +763,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(400, {"ok": False, "error": "strategies_array_required"})
             for item in payload["strategies"]:
                 if not isinstance(item, dict) or not isinstance(item.get("formula"), str):
-                    raise ValueError("Each strategy needs a formula.")
-                validate_formula(item["formula"])
+                    raise ValueError("Each strategy needs a formula or Python source.")
+                strategy_type = item.get("strategyType", "formula")
+                if strategy_type == "python_program":
+                    validate_strategy_source(item["formula"])
+                elif strategy_type == "formula":
+                    validate_formula(item["formula"])
+                else:
+                    raise ValueError("Strategy type is invalid.")
             saved = replace_strategies(payload["strategies"])
             return self._json(200, {"ok": True, "strategies": saved})
         except StrategyFormulaError as exc:
