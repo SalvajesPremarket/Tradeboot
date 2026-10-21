@@ -13,7 +13,7 @@ import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-BASE_URL = "https://public-api.etoro.com/api/v1/"
+BASE_URL = "https://public-api.etoro.com/api/v2/"
 TIMEOUT_SECONDS = 12
 LIVE_ACK = "I_UNDERSTAND_REAL_MONEY_RISK"
 
@@ -103,19 +103,22 @@ def open_market_order(
     if leverage != 1:
         raise EtoroExecutionError("leverage_must_be_one")
     payload = {
-        "InstrumentId": instrument_id,
-        "Amount": amount,
-        "Leverage": 1,
-        "IsBuy": is_buy,
+        "action": "open",
+        "transaction": "buy" if is_buy else "sell",
+        "instrumentId": instrument_id,
+        "orderType": "mkt",
+        "amount": amount,
+        "orderCurrency": "usd",
+        "leverage": 1,
     }
     # Stop/target fields are only forwarded when the caller supplies validated positive rates.
-    for key, value in (("StopLossRate", stop_loss_rate), ("TakeProfitRate", take_profit_rate)):
+    for key, value in (("stopLossRate", stop_loss_rate), ("takeProfitRate", take_profit_rate)):
         if value is not None:
             if isinstance(value, bool) or not isinstance(value, (int, float)) or float(value) <= 0:
                 raise EtoroExecutionError("invalid_protective_order_rate")
             payload[key] = float(value)
     prefix = "trading/execution/demo/" if mode == "demo" else "trading/execution/"
-    return _request("POST", prefix + "market-open-orders/by-amount", payload)
+    return _request("POST", prefix + "orders", payload)
 
 
 def close_market_position(position_id: int) -> dict:
@@ -126,6 +129,6 @@ def close_market_position(position_id: int) -> dict:
     prefix = "trading/execution/demo/" if mode == "demo" else "trading/execution/"
     return _request(
         "POST",
-        prefix + f"market-close-orders/positions/{position_id}",
-        {"UnitsToDeduct": None},
+        prefix + "orders",
+        {"action": "close", "positionId": position_id},
     )
