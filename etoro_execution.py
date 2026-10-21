@@ -1,9 +1,9 @@
 """Guarded eToro market-order adapter.
 
-No orders are sent unless ETORO_TRADING_ENABLED=true and ETORO_TRADING_MODE is
-explicitly set. Live mode additionally requires an acknowledgement string and a
-positive per-order cap. Keep strategy execution and risk checks upstream of this
-module; this module is not a strategy engine.
+Demo orders are sent only when ETORO_TRADING_ENABLED=true and
+ETORO_TRADING_MODE=demo. This adapter refuses real-money mode entirely.
+Keep strategy execution and risk checks upstream of this module; this module
+is not a strategy engine.
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from urllib.request import Request, urlopen
 
 BASE_URL = "https://public-api.etoro.com/api/v2/"
 TIMEOUT_SECONDS = 12
-LIVE_ACK = "I_UNDERSTAND_REAL_MONEY_RISK"
 
 
 class EtoroExecutionError(RuntimeError):
@@ -28,22 +27,18 @@ def _truthy(name: str) -> bool:
 
 def _configuration() -> tuple[str, str, str, float]:
     mode = os.environ.get("ETORO_TRADING_MODE", "disabled").strip().lower()
-    if mode not in {"demo", "real"}:
-        raise EtoroExecutionError("trading_mode_disabled")
+    # This release is intentionally Demo-only: no environment variable can route
+    # orders to the real-money endpoint.
+    if mode != "demo":
+        raise EtoroExecutionError("demo_mode_required")
     if not _truthy("ETORO_TRADING_ENABLED"):
         raise EtoroExecutionError("trading_disabled")
     api_key = os.environ.get("ETORO_API_KEY", "").strip()
-    # Reuse the existing Render credential for Demo; do not require duplicate secret setup.
-    # Real trading deliberately requires a separately configured real-account key.
-    user_key_name = "ETORO_REAL_USER_KEY" if mode == "real" else "ETORO_DEMO_USER_KEY"
-    user_key = os.environ.get(user_key_name, "").strip()
-    if mode == "demo" and not user_key:
+    user_key = os.environ.get("ETORO_DEMO_USER_KEY", "").strip()
+    if not user_key:
         user_key = os.environ.get("ETORO_USER_KEY", "").strip()
     if not api_key or not user_key:
-        raise EtoroExecutionError("mode_specific_etoro_credentials_not_configured")
-    if mode == "real":
-        if os.environ.get("ETORO_LIVE_TRADING_ACK", "").strip() != LIVE_ACK:
-            raise EtoroExecutionError("live_trading_acknowledgement_required")
+        raise EtoroExecutionError("etoro_credentials_not_configured")
     try:
         max_amount = float(os.environ.get("ETORO_MAX_ORDER_AMOUNT_USD", "0"))
     except (TypeError, ValueError):
