@@ -126,8 +126,13 @@ async function connectStrategyStorage(){
   if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'No se pudo conectar; revisa el token y DATABASE_URL en Render.');
   const local=strategies;
   cloudMode=true;cloudToken=token;sessionStorage.setItem('tradeboot.strategyAdminToken',token);
-  if(!data.strategies.length&&local.length&&confirm('El servidor está vacío. ¿Quieres copiar tus '+local.length+' estrategias locales al almacenamiento compartido?')){
-   strategies=local;await persistStrategies();
+  if(!data.strategies.length&&local.length){
+   if(confirm('El servidor está vacío. ¿Quieres copiar tus '+local.length+' estrategias locales al almacenamiento compartido?')){
+    strategies=local;await persistStrategies();
+   }else{
+    cloudMode=false;strategies=local;renderStrategies();
+    status.textContent='Servidor vacío · se conservaron tus '+local.length+' estrategias locales; no se sobrescribieron.';
+   }
   }else{
    strategies=data.strategies;localStorage.setItem(strategyStoreKey,JSON.stringify(strategies));renderStrategies();status.textContent='Conectado · estrategias cargadas del almacenamiento compartido.';
    try{const cr=await fetch('/strategies/capital',{headers:{'X-Strategy-Admin-Token':token},cache:'no-store'});const cd=await cr.json();if(cr.ok&&cd.ok){generalCapital=Number(cd.capital)||0;$('strategy-capital').value=String(generalCapital);localStorage.setItem('tradeboot.generalCapital.v1',String(generalCapital));updateBudgetPreview();$('capital-status').textContent='Monto general cargado de PostgreSQL.';}}catch(_){}
