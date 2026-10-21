@@ -218,7 +218,18 @@ $('strategy-list').addEventListener('click',async event=>{
   for(let i=1;i<=20;i++){const p=2+i*.01;historical.push({open:p,high:p,low:p,close:p});}
   const at=(seconds)=>new Date(minute.getTime()+seconds*1000).toISOString();
   const payload={symbol:'SIM',side:'LONG',config:{max_prior_streak:100},candles:historical,ticks:[{price:2.2,timestamp:at(0)},{price:2.197,timestamp:at(5)},{price:2.2,timestamp:at(10)}],context:{prev_close:2,avg_premarket_volume_30d:100000,volume_today:600000,float_shares:10000000,news:[{published_at:new Date(minute.getTime()-600000).toISOString(),headline:'Company reports quarterly earnings'}]}};
-  try{const response=await fetch('/strategies/simulate-momentum',{method:'POST',headers:{'Content-Type':'application/json','X-Strategy-Admin-Token':cloudToken},body:JSON.stringify(payload),cache:'no-store'});const data=await response.json();if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'Falló la simulación');const signals=data.actions.map(a=>a.action+' '+a.side+' @ 
+  try {
+   const response=await fetch('/strategies/simulate-momentum',{method:'POST',headers:{'Content-Type':'application/json','X-Strategy-Admin-Token':cloudToken},body:JSON.stringify(payload),cache:'no-store'});
+   const data=await response.json();
+   if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'Falló la simulación');
+   const signals=data.actions.map(a=>a.action+' '+a.side+' '+String(a.price)+(a.stop?' stop '+String(a.stop):'')).join(' | ');
+   strategyEvaluationResults[item.id]='Prueba sintética · '+data.ticks_processed+' ticks · '+(signals||'sin señales')+' · sin órdenes reales.';
+  } catch(error) {
+   strategyEvaluationResults[item.id]='Error en la prueba del motor: '+error.message;
+  }
+  renderStrategies();
+  return;
+ }
  if(button.dataset.action==='toggle'&&(item.strategyType||'formula')==='formula'){item.enabled=!item.enabled;persistStrategies();renderStrategies()}
  if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;strategyType.value=item.strategyType||'formula';strategyType.dispatchEvent(new Event('change'));strategyAllocation.value=String(item.allocationPercent??10);updateBudgetPreview();$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
  if(button.dataset.action==='delete'){if(!confirm('¿Borrar la estrategia «'+item.name+'»?'))return;strategies=strategies.filter(s=>s.id!==item.id);if(editingStrategyId===item.id)resetStrategyForm();persistStrategies();renderStrategies()}
