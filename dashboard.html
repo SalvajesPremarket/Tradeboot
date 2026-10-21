@@ -17,7 +17,7 @@
 .lower{display:grid;grid-template-columns:1.2fr .8fr;gap:14px;margin-top:18px}.panel{background:rgba(18,28,45,.8);border:1px solid var(--line);border-radius:16px;padding:18px}.panel h3{margin:0 0 10px;font-size:15px}.panel p{color:var(--muted);font-size:13px;margin:6px 0}.statusline{display:flex;align-items:center;gap:8px;margin:10px 0;font-size:13px}.error{color:#ff9aaa}.foot{color:#71839d;font-size:11px;margin-top:22px}.empty{color:var(--muted);padding:18px 0}.mono{font-variant-numeric:tabular-nums}
 @media(max-width:760px){.cards{grid-template-columns:1fr}.lower{grid-template-columns:1fr}.price{font-size:34px}.wrap{padding:17px 12px 35px}.hero{padding:16px}.brand h1{font-size:21px}}
 
-.strategies{margin-top:20px}.strategy-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}.strategy-head h2{margin:0 0 5px;font-size:21px}.strategy-head p{margin:0;color:var(--muted);font-size:13px;max-width:720px}.strategy-form{display:grid;grid-template-columns:minmax(0,.75fr) minmax(0,1.25fr);gap:12px;margin-top:18px}.field{display:flex;flex-direction:column;gap:6px}.field label{font-size:12px;color:#b9c8dc;font-weight:700}.field input,.field textarea{width:100%;background:#0b1423;border:1px solid #344761;border-radius:9px;color:var(--text);padding:11px;font:inherit}.field textarea{min-height:130px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px}.field.full{grid-column:1/-1}.form-actions{display:flex;gap:9px;flex-wrap:wrap;align-items:center}.secondary{background:#172438;border-color:#344761}.danger{background:#3a2029;border-color:#70404c}.strategy-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:18px}.strategy-item{border:1px solid var(--line);background:#0f1929;border-radius:13px;padding:15px;min-width:0}.strategy-item.enabled{border-color:#28634f}.strategy-title{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.strategy-title h3{margin:0;font-size:16px;overflow-wrap:anywhere}.strategy-formula{white-space:pre-wrap;overflow-wrap:anywhere;background:#0a1220;border:1px solid #202f45;border-radius:8px;padding:10px;color:#bdcce0;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;max-height:130px;overflow:auto;margin:12px 0}.strategy-actions{display:flex;gap:8px;flex-wrap:wrap}.strategy-actions button{padding:7px 10px;font-size:12px}.status-note{font-size:12px;color:var(--muted);margin-top:12px}.status-note strong{color:var(--amber)}.empty-strategies{border:1px dashed #344761;border-radius:12px;padding:22px;text-align:center;color:var(--muted);grid-column:1/-1}@media(max-width:760px){.strategy-form,.strategy-list{grid-template-columns:1fr}.field.full{grid-column:auto}}
+.strategies{margin-top:20px}.strategy-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap}.strategy-head h2{margin:0 0 5px;font-size:21px}.strategy-head p{margin:0;color:var(--muted);font-size:13px;max-width:720px}.strategy-form{display:grid;grid-template-columns:minmax(0,.75fr) minmax(0,1.25fr);gap:12px;margin-top:18px}.field{display:flex;flex-direction:column;gap:6px}.field label{font-size:12px;color:#b9c8dc;font-weight:700}.field input,.field textarea,.field select{width:100%;background:#0b1423;border:1px solid #344761;border-radius:9px;color:var(--text);padding:11px;font:inherit}.field textarea{min-height:130px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px}.field.full{grid-column:1/-1}.form-actions{display:flex;gap:9px;flex-wrap:wrap;align-items:center}.secondary{background:#172438;border-color:#344761}.danger{background:#3a2029;border-color:#70404c}.strategy-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:18px}.strategy-item{border:1px solid var(--line);background:#0f1929;border-radius:13px;padding:15px;min-width:0}.strategy-item.enabled{border-color:#28634f}.strategy-title{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.strategy-title h3{margin:0;font-size:16px;overflow-wrap:anywhere}.strategy-formula{white-space:pre-wrap;overflow-wrap:anywhere;background:#0a1220;border:1px solid #202f45;border-radius:8px;padding:10px;color:#bdcce0;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;max-height:130px;overflow:auto;margin:12px 0}.strategy-actions{display:flex;gap:8px;flex-wrap:wrap}.strategy-actions button{padding:7px 10px;font-size:12px}.status-note{font-size:12px;color:var(--muted);margin-top:12px}.status-note strong{color:var(--amber)}.empty-strategies{border:1px dashed #344761;border-radius:12px;padding:22px;text-align:center;color:var(--muted);grid-column:1/-1}@media(max-width:760px){.strategy-form,.strategy-list{grid-template-columns:1fr}.field.full{grid-column:auto}}
 
 </style>
 </head>
@@ -56,13 +56,14 @@
     </div>
   </div>
   <form id="strategy-form" class="strategy-form">
-    <div class="field"><label for="strategy-name">Nombre de la estrategia</label><input id="strategy-name" maxlength="80" placeholder="Ej. Ruptura de apertura" required></div>
-    <div class="field"><label for="strategy-formula">Fórmula / reglas de la estrategia</label><textarea id="strategy-formula" maxlength="50000" placeholder="Pega aquí tu fórmula Python (hasta 50.000 caracteres), conservando saltos de línea e indentación" required></textarea></div>
+    <div class="field"><label for="strategy-name">Nombre de la estrategia</label><input id="strategy-name" maxlength="80" placeholder="Ej. Momentum Tramos" required></div>
+    <div class="field"><label for="strategy-type">Tipo de estrategia</label><select id="strategy-type"><option value="python_program">Programa Python completo (clases/indicadores/estado)</option><option value="formula">Fórmula simple</option></select></div>
+    <div class="field full"><label for="strategy-formula">Código o fórmula de la estrategia</label><textarea id="strategy-formula" maxlength="50000" placeholder="Pega el programa Python completo, conservando saltos de línea e indentación (hasta 50.000 caracteres)" required></textarea><span class="status-note" id="strategy-type-help">Se validará la sintaxis y se guardará el código completo. No se ejecuta hasta integrar y probar el motor específico.</span></div>
     <div class="field"><label for="strategy-allocation">Porcentaje del capital general para esta estrategia (%)</label><input id="strategy-allocation" type="number" min="0" max="100" step="0.01" value="10" required><span class="status-note">Cada estrategia usa su porcentaje independiente del monto general.</span></div>
     <div class="field"><label>Presupuesto calculado</label><div id="strategy-budget-preview" class="status-note">$0.00 asignados · cálculo informativo</div></div>
     <div class="field full"><div class="form-actions"><button type="submit" id="strategy-save">＋ Guardar estrategia</button><button type="button" class="secondary" id="strategy-validate">Validar fórmula</button><button type="button" class="secondary" id="strategy-cancel" hidden>Cancelar edición</button><span id="strategy-validation-status" class="status-note" role="status" aria-live="polite"></span></div></div>
   </form>
-  <div class="status-note"><strong>Importante:</strong> el validador admite un subconjunto seguro de Python en varias líneas: asignaciones, if/else, comparaciones, AND/OR/NOT y abs/min/max/round. Ejemplo: <code>entry = price &gt; 5 and rvol &gt;= 2</code> y después <code>entry and change_pct &gt; 1</code>. Variables disponibles: price, bid, ask, change_pct, gap_pct, volume, rvol, premarket_change_pct, float_shares, ema20, macd, macd_signal, bollinger_upper y bollinger_lower. Cada variable necesita datos reales; las variables sin datos bloquean la evaluación y nunca se inventan. Sin almacenamiento compartido, las estrategias se guardan solo en este navegador. Conectado, se guardan en PostgreSQL. No envían órdenes; Tradeboot permanece en modo de solo lectura.</div>
+  <div class="status-note"><strong>Importante:</strong> las fórmulas simples usan un subconjunto seguro de Python. Los programas completos se validan sintácticamente y se guardan por separado; no se ejecutan hasta integrar y probar su motor específico. Ninguna estrategia envía órdenes reales. Para las fórmulas simples: asignaciones, if/else, comparaciones, AND/OR/NOT y abs/min/max/round. Ejemplo: <code>entry = price &gt; 5 and rvol &gt;= 2</code> y después <code>entry and change_pct &gt; 1</code>. Variables disponibles: price, bid, ask, change_pct, gap_pct, volume, rvol, premarket_change_pct, float_shares, ema20, macd, macd_signal, bollinger_upper y bollinger_lower. Cada variable necesita datos reales; las variables sin datos bloquean la evaluación y nunca se inventan. Sin almacenamiento compartido, las estrategias se guardan solo en este navegador. Conectado, se guardan en PostgreSQL. No envían órdenes; Tradeboot permanece en modo de solo lectura.</div>
   <div class="strategy-list" id="strategy-list"><div class="empty-strategies">Todavía no has creado estrategias. Usa el formulario para añadir la primera.</div></div>
 </section>
 
@@ -83,7 +84,16 @@ let generalCapital=Number(localStorage.getItem('tradeboot.generalCapital.v1')||0
 let cloudToken=sessionStorage.getItem('tradeboot.strategyAdminToken')||'';
 const strategyEvaluationResults={};
 const strategyName=$('strategy-name'), strategyFormula=$('strategy-formula');
-const strategyAllocation=$('strategy-allocation');
+const strategyType=$('strategy-type'), strategyAllocation=$('strategy-allocation');
+let validatedProgramText='';
+strategyType.addEventListener('change',()=>{
+ const program=strategyType.value==='python_program';
+ $('strategy-type-help').textContent=program?'Se validará la sintaxis y se guardará el código completo. No se ejecuta hasta integrar y probar el motor específico.':'Se validará y evaluará como fórmula con el subconjunto seguro de Python.';
+ $('strategy-validate').textContent=program?'Validar sintaxis Python':'Validar fórmula';
+ strategyFormula.placeholder=program?'Pega el programa Python completo, conservando saltos de línea e indentación (hasta 50.000 caracteres)':'Pega una fórmula compatible, por ejemplo: price > 5 and rvol >= 2';
+ validatedProgramText='';
+});
+strategyType.dispatchEvent(new Event('change'));
 function moneyUSD(value){return Number(value||0).toLocaleString('en-US',{style:'currency',currency:'USD'});}
 function updateBudgetPreview(){const pct=Number(strategyAllocation.value);const valid=Number.isFinite(pct)&&pct>=0&&pct<=100;$('strategy-budget-preview').textContent=moneyUSD(valid?generalCapital*pct/100:0)+' asignados · cálculo informativo';}
 function loadGeneralCapital(){$('strategy-capital').value=String(generalCapital);updateBudgetPreview();}
@@ -131,10 +141,10 @@ function renderStrategies(){
  $('strategy-count').textContent=strategies.length+' estrategia'+(strategies.length===1?'':'s');
  const list=$('strategy-list');
  if(!strategies.length){list.innerHTML='<div class="empty-strategies">Todavía no has creado estrategias. Usa el formulario para añadir la primera.</div>';return}
- list.innerHTML=strategies.map(s=>'<article class="strategy-item '+(s.enabled?'enabled':'')+'"><div class="strategy-title"><div><h3>'+escapeHtml(s.name)+'</h3><div class="company">'+(s.enabled?'ACTIVADA · CONFIGURACIÓN':'DESACTIVADA')+'</div></div><span class="tag '+(s.enabled?'good':'warn')+'">'+(s.enabled?'ON':'OFF')+'</span></div><div class="strategy-formula">'+escapeHtml(s.formula)+'</div><div class="status-note">'+escapeHtml(s.enabled?(strategyEvaluationResults[s.id]||"Esperando evaluación de cotizaciones utilizables."):"Estrategia desactivada; no se evalúa.")+'</div><div class="strategy-actions"><button type="button" data-action="toggle" data-id="'+escapeHtml(s.id)+'" class="secondary">'+(s.enabled?'Desactivar':'Activar')+'</button><button type="button" data-action="edit" data-id="'+escapeHtml(s.id)+'" class="secondary">Editar</button><button type="button" data-action="delete" data-id="'+escapeHtml(s.id)+'" class="danger">Borrar</button></div></article>').join('');
+ list.innerHTML=strategies.map(s=>{const program=(s.strategyType||'formula')==='python_program',momentum=program&&s.name.toLowerCase().includes('momentum tramos');return '<article class="strategy-item '+(s.enabled?'enabled':'')+'"><div class="strategy-title"><div><h3>'+escapeHtml(s.name)+'</h3><div class="company">'+(momentum?'MOTOR CONECTADO · SOLO SIMULACIÓN':program?'PYTHON COMPLETO · MOTOR NO DISPONIBLE':s.enabled?'ACTIVADA · CONFIGURACIÓN':'DESACTIVADA')+'</div></div><span class="tag '+(s.enabled?'good':'warn')+'">'+(program?'CÓDIGO':s.enabled?'ON':'OFF')+'</span></div><div class="strategy-formula">'+escapeHtml(s.formula)+'</div><div class="status-note">'+escapeHtml(strategyEvaluationResults[s.id]||(momentum?'Motor Momentum Tramos disponible para una prueba con datos sintéticos.':program?'Código guardado; no se ejecuta automáticamente.':s.enabled?'Esperando evaluación de cotizaciones utilizables.':'Estrategia desactivada; no se evalúa.'))+'</div><div class="strategy-actions">'+(momentum?'<button type="button" data-action="simulate" data-id="'+escapeHtml(s.id)+'" class="secondary">Probar motor (simulación)</button>':'')+'<button type="button" data-action="toggle" data-id="'+escapeHtml(s.id)+'" class="secondary" '+(program?'disabled title="Solo el motor integrado Momentum Tramos admite simulación"':'')+'>'+(s.enabled?'Desactivar':'Activar')+'</button><button type="button" data-action="edit" data-id="'+escapeHtml(s.id)+'" class="secondary">Editar</button><button type="button" data-action="delete" data-id="'+escapeHtml(s.id)+'" class="danger">Borrar</button></div></article>'}).join('');
 }
 async function evaluateActiveStrategies(resultsBySymbol){
- const active=strategies.filter(s=>s.enabled);
+ const active=strategies.filter(s=>s.enabled&&(s.strategyType||'formula')==='formula');
  if(!active.length)return;
  const usable=Object.values(resultsBySymbol||{}).filter(r=>r&&r.ok&&r.quote_is_usable===true);
  for(const s of active)strategyEvaluationResults[s.id]='Evaluando condiciones…';
@@ -172,33 +182,161 @@ async function evaluateActiveStrategies(resultsBySymbol){
  }));
  renderStrategies();
 }
-function resetStrategyForm(){editingStrategyId=null;$('strategy-form').reset();strategyAllocation.value='10';updateBudgetPreview();$('strategy-save').textContent='＋ Guardar estrategia';$('strategy-cancel').hidden=true;$('strategy-validation-status').textContent=''}
+function resetStrategyForm(){editingStrategyId=null;$('strategy-form').reset();validatedProgramText='';strategyType.dispatchEvent(new Event('change'));strategyAllocation.value='10';updateBudgetPreview();$('strategy-save').textContent='＋ Guardar estrategia';$('strategy-cancel').hidden=true;$('strategy-validation-status').textContent=''}
 $('strategy-form').addEventListener('submit',event=>{
  event.preventDefault();
- const name=strategyName.value.trim(),formula=strategyFormula.value.trim(),allocationPercent=Number(strategyAllocation.value);
- if(!name||!formula)return;
+ const name=strategyName.value.trim(),formula=strategyFormula.value,strategyTypeValue=strategyType.value,allocationPercent=Number(strategyAllocation.value);
+ if(!name||!formula.trim())return;
+ if(strategyTypeValue==='python_program'&&validatedProgramText!==formula){$('strategy-validation-status').textContent='Valida primero la sintaxis Python y luego guarda el programa.';return;}
  if(!Number.isFinite(allocationPercent)||allocationPercent<0||allocationPercent>100){$('strategy-validation-status').textContent='El porcentaje debe estar entre 0 y 100.';return;}
- if(editingStrategyId){const item=strategies.find(s=>s.id===editingStrategyId);if(item){item.name=name;item.formula=formula;item.allocationPercent=allocationPercent}}
- else{strategies.push({id:(typeof crypto!=='undefined'&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2),name,formula,enabled:false,allocationPercent,createdAt:new Date().toISOString()})}
+ if(editingStrategyId){const item=strategies.find(s=>s.id===editingStrategyId);if(item){item.name=name;item.formula=formula;item.strategyType=strategyTypeValue;item.allocationPercent=allocationPercent}}
+ else{strategies.push({id:(typeof crypto!=='undefined'&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2),name,formula,strategyType:strategyTypeValue,enabled:false,allocationPercent,createdAt:new Date().toISOString()})}
  try{persistStrategies();renderStrategies();resetStrategyForm()}catch(_){alert('No se pudo guardar en el almacenamiento local de este navegador.')}
 });
 $('strategy-validate').addEventListener('click',async()=>{
- const formula=strategyFormula.value.trim(), status=$('strategy-validation-status');
- if(!formula){status.textContent='Pega una fórmula antes de validarla.';return}
+ const formula=strategyFormula.value, type=strategyType.value, status=$('strategy-validation-status');
+ if(!formula.trim()){status.textContent='Pega el código o fórmula antes de validar.';return}
  status.textContent='Validando…';
  try{
-  const response=await fetch('/strategies/validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({formula,validate_only:true}),cache:'no-store'});
+  const endpoint=type==='python_program'?'/strategies/validate-program':'/strategies/validate';
+  const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({formula,validate_only:true}),cache:'no-store'});
   const data=await response.json();
   if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'No se pudo validar');
-  status.textContent='Fórmula válida · variables: '+(data.variables.length?data.variables.join(', '):'ninguna');
- }catch(error){status.textContent='Fórmula no válida: '+error.message}
+  if(type==='python_program'){validatedProgramText=formula;status.textContent='Sintaxis Python válida · '+data.line_count+' líneas · ya puedes guardar el código.';}
+  else status.textContent='Fórmula válida · variables: '+(data.variables.length?data.variables.join(', '):'ninguna');
+ }catch(error){validatedProgramText='';status.textContent='Validación no válida: '+error.message}
 });
 $('strategy-cancel').addEventListener('click',resetStrategyForm);
-$('strategy-list').addEventListener('click',event=>{
+$('strategy-list').addEventListener('click',async event=>{
  const button=event.target.closest('button[data-action]');if(!button)return;
  const item=strategies.find(s=>s.id===button.dataset.id);if(!item)return;
- if(button.dataset.action==='toggle'){item.enabled=!item.enabled;persistStrategies();renderStrategies()}
- if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;strategyAllocation.value=String(item.allocationPercent??10);updateBudgetPreview();$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
+ if(button.dataset.action==='simulate'){
+  if(!cloudMode||!cloudToken){strategyEvaluationResults[item.id]='Conecta primero el almacenamiento compartido para autorizar la prueba del motor.';renderStrategies();return;}
+  strategyEvaluationResults[item.id]='Ejecutando prueba sintética del motor…';renderStrategies();
+  const now=new Date(),minute=new Date(now);minute.setSeconds(0,0);
+  const historical=Array.from({length:200},()=>({open:2,high:2,low:2,close:2}));
+  for(let i=1;i<=20;i++){const p=2+i*.01;historical.push({open:p,high:p,low:p,close:p});}
+  const at=(seconds)=>new Date(minute.getTime()+seconds*1000).toISOString();
+  const payload={symbol:'SIM',side:'LONG',config:{max_prior_streak:100},candles:historical,ticks:[{price:2.2,timestamp:at(0)},{price:2.197,timestamp:at(5)},{price:2.2,timestamp:at(10)}],context:{prev_close:2,avg_premarket_volume_30d:100000,volume_today:600000,float_shares:10000000,news:[{published_at:new Date(minute.getTime()-600000).toISOString(),headline:'Company reports quarterly earnings'}]}};
+  try {
+   const response=await fetch('/strategies/simulate-momentum',{method:'POST',headers:{'Content-Type':'application/json','X-Strategy-Admin-Token':cloudToken},body:JSON.stringify(payload),cache:'no-store'});
+   const data=await response.json();
+   if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'Falló la simulación');
+   const signals=data.actions.map(a=>a.action+' '+a.side+' '+String(a.price)+(a.stop?' stop '+String(a.stop):'')).join(' | ');
+   strategyEvaluationResults[item.id]='Prueba sintética · '+data.ticks_processed+' ticks · '+(signals||'sin señales')+' · sin órdenes reales.';
+  } catch(error) {
+   strategyEvaluationResults[item.id]='Error en la prueba del motor: '+error.message;
+  }
+  renderStrategies();
+  return;
+ }
+ if(button.dataset.action==='toggle'&&(item.strategyType||'formula')==='formula'){item.enabled=!item.enabled;persistStrategies();renderStrategies()}
+ if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;strategyType.value=item.strategyType||'formula';strategyType.dispatchEvent(new Event('change'));strategyAllocation.value=String(item.allocationPercent??10);updateBudgetPreview();$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
+ if(button.dataset.action==='delete'){if(!confirm('¿Borrar la estrategia «'+item.name+'»?'))return;strategies=strategies.filter(s=>s.id!==item.id);if(editingStrategyId===item.id)resetStrategyForm();persistStrategies();renderStrategies()}
+});
+loadStrategies();renderStrategies();if(cloudToken)connectStrategyStorage();
+
+const symbols=['AAPL','MSFT','NVDA'];
+const names={AAPL:'Apple Inc.',MSFT:'Microsoft',NVDA:'NVIDIA'};
+const money=n=>Number.isFinite(n)?n.toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:4}):'—';
+const num=v=>{if(v===null||v===undefined||v==='')return NaN;const n=Number(v);return Number.isFinite(n)?n:NaN};
+function find(row,keys){for(const k of keys){if(row&&row[k]!==undefined&&row[k]!==null&&row[k]!==''){const n=num(row[k]);if(Number.isFinite(n))return n}}return NaN}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function card(r){
+ const sym=r.symbol||'—', rates=r.rates&&r.rates.rates, row=Array.isArray(rates)?rates[0]||{}:{};
+ const bid=find(row,['Bid','bid','BidRate','bidRate','BuyRate','buyRate']), ask=find(row,['Ask','ask','AskRate','askRate','SellRate','sellRate']);
+ const last=find(row,['Rate','rate','Last','last','Price','price','CurrentRate','currentRate']);
+ const mid=Number.isFinite(bid)&&Number.isFinite(ask)?(bid+ask)/2:last;
+ const fresh=r.quote_is_fresh===true, usable=r.quote_is_usable===true;
+ let label=usable?'FRESCA Y CONFIRMADA':fresh?'NO CONFIRMADA':r.ok?'ANTIGUA':'SIN DATOS';
+ let tag=usable?'good':fresh?'warn':'bad';
+ let detail=usable?'Mercado abierto · sin retraso indicado':fresh?'Reciente, pero calidad no confirmada':r.quote_quality_status==='stale'?'Cotización antigua':'No se pudo obtener una cotización';
+ const age=Number.isFinite(num(r.quote_age_seconds))?Math.max(0,Math.floor(num(r.quote_age_seconds)))+' s':'—';
+ const time=r.quote_time?new Date(r.quote_time).toLocaleTimeString('es-CR',{hour12:false}):'—';
+ return '<article class="card"><div class="ticker"><div><div class="symbol">'+escapeHtml(sym)+'</div><div class="company">'+escapeHtml(names[sym]||sym)+'</div></div><span class="tag '+tag+'">'+label+'</span></div><div class="price">'+money(mid)+'</div><div class="quality"><span class="dot '+(usable?'ok':fresh?'':'bad')+'"></span>'+detail+'</div><div class="metrics"><div class="metric"><span>BID / COMPRA</span><strong>'+money(bid)+'</strong></div><div class="metric"><span>ASK / VENTA</span><strong>'+money(ask)+'</strong></div><div class="metric"><span>ANTIGÜEDAD</span><strong>'+age+'</strong></div><div class="metric"><span>HORA DE COTIZACIÓN</span><strong>'+time+'</strong></div></div></article>';
+}
+async function refresh(){
+ const btn=$('refresh');btn.disabled=true;$('connection-text').textContent='Actualizando…';$('connection-dot').className='dot';
+ try{
+   const response=await fetch('/etoro/instrument-stream?symbols='+symbols.join(','),{cache:'no-store'});
+   const data=await response.json();
+   if(!response.ok||!Array.isArray(data.results))throw new Error(data.error||'No se recibieron datos de cotización');
+   const by=Object.fromEntries(data.results.map(r=>[r.symbol,r]));
+   await evaluateActiveStrategies(by);
+   $('quotes').innerHTML=symbols.map(s=>card(by[s]||{symbol:s,ok:false})).join('');
+   const good=symbols.filter(s=>by[s]&&by[s].quote_is_usable===true).length;
+   $('connection-dot').className='dot '+(good===symbols.length?'ok':good?'':'bad');
+   $('connection-text').textContent=good+'/'+symbols.length+' cotizaciones utilizables';
+   $('api-dot').className='dot '+(data.ok?'ok':'bad');
+   $('api-status').textContent=data.ok?'API conectada · respuesta recibida':'API respondió con errores en una o más acciones';
+   $('quality-summary').textContent=good+' de '+symbols.length+' cotizaciones cumplen frescura, mercado abierto y ausencia de retraso según metadata del proveedor.';
+   $('updated').textContent='Última consulta: '+new Date().toLocaleString('es-CR',{hour12:false})+' · Captura puntual de eToro';
+ }catch(e){
+   $('connection-dot').className='dot bad';$('connection-text').textContent='Conexión con error';
+   $('api-dot').className='dot bad';$('api-status').textContent='No se pudo actualizar: '+e.message;
+   $('updated').textContent='Último intento: '+new Date().toLocaleString('es-CR',{hour12:false});
+ }finally{btn.disabled=false}
+}
+$('refresh').addEventListener('click',refresh);refresh();setInterval(refresh,30000);
+</script>
+</body>
+</html>
++a.price+(a.stop?' · stop 
+ if(button.dataset.action==='toggle'&&(item.strategyType||'formula')==='formula'){item.enabled=!item.enabled;persistStrategies();renderStrategies()}
+ if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;strategyType.value=item.strategyType||'formula';strategyType.dispatchEvent(new Event('change'));strategyAllocation.value=String(item.allocationPercent??10);updateBudgetPreview();$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
+ if(button.dataset.action==='delete'){if(!confirm('¿Borrar la estrategia «'+item.name+'»?'))return;strategies=strategies.filter(s=>s.id!==item.id);if(editingStrategyId===item.id)resetStrategyForm();persistStrategies();renderStrategies()}
+});
+loadStrategies();renderStrategies();if(cloudToken)connectStrategyStorage();
+
+const symbols=['AAPL','MSFT','NVDA'];
+const names={AAPL:'Apple Inc.',MSFT:'Microsoft',NVDA:'NVIDIA'};
+const money=n=>Number.isFinite(n)?n.toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:4}):'—';
+const num=v=>{if(v===null||v===undefined||v==='')return NaN;const n=Number(v);return Number.isFinite(n)?n:NaN};
+function find(row,keys){for(const k of keys){if(row&&row[k]!==undefined&&row[k]!==null&&row[k]!==''){const n=num(row[k]);if(Number.isFinite(n))return n}}return NaN}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function card(r){
+ const sym=r.symbol||'—', rates=r.rates&&r.rates.rates, row=Array.isArray(rates)?rates[0]||{}:{};
+ const bid=find(row,['Bid','bid','BidRate','bidRate','BuyRate','buyRate']), ask=find(row,['Ask','ask','AskRate','askRate','SellRate','sellRate']);
+ const last=find(row,['Rate','rate','Last','last','Price','price','CurrentRate','currentRate']);
+ const mid=Number.isFinite(bid)&&Number.isFinite(ask)?(bid+ask)/2:last;
+ const fresh=r.quote_is_fresh===true, usable=r.quote_is_usable===true;
+ let label=usable?'FRESCA Y CONFIRMADA':fresh?'NO CONFIRMADA':r.ok?'ANTIGUA':'SIN DATOS';
+ let tag=usable?'good':fresh?'warn':'bad';
+ let detail=usable?'Mercado abierto · sin retraso indicado':fresh?'Reciente, pero calidad no confirmada':r.quote_quality_status==='stale'?'Cotización antigua':'No se pudo obtener una cotización';
+ const age=Number.isFinite(num(r.quote_age_seconds))?Math.max(0,Math.floor(num(r.quote_age_seconds)))+' s':'—';
+ const time=r.quote_time?new Date(r.quote_time).toLocaleTimeString('es-CR',{hour12:false}):'—';
+ return '<article class="card"><div class="ticker"><div><div class="symbol">'+escapeHtml(sym)+'</div><div class="company">'+escapeHtml(names[sym]||sym)+'</div></div><span class="tag '+tag+'">'+label+'</span></div><div class="price">'+money(mid)+'</div><div class="quality"><span class="dot '+(usable?'ok':fresh?'':'bad')+'"></span>'+detail+'</div><div class="metrics"><div class="metric"><span>BID / COMPRA</span><strong>'+money(bid)+'</strong></div><div class="metric"><span>ASK / VENTA</span><strong>'+money(ask)+'</strong></div><div class="metric"><span>ANTIGÜEDAD</span><strong>'+age+'</strong></div><div class="metric"><span>HORA DE COTIZACIÓN</span><strong>'+time+'</strong></div></div></article>';
+}
+async function refresh(){
+ const btn=$('refresh');btn.disabled=true;$('connection-text').textContent='Actualizando…';$('connection-dot').className='dot';
+ try{
+   const response=await fetch('/etoro/instrument-stream?symbols='+symbols.join(','),{cache:'no-store'});
+   const data=await response.json();
+   if(!response.ok||!Array.isArray(data.results))throw new Error(data.error||'No se recibieron datos de cotización');
+   const by=Object.fromEntries(data.results.map(r=>[r.symbol,r]));
+   await evaluateActiveStrategies(by);
+   $('quotes').innerHTML=symbols.map(s=>card(by[s]||{symbol:s,ok:false})).join('');
+   const good=symbols.filter(s=>by[s]&&by[s].quote_is_usable===true).length;
+   $('connection-dot').className='dot '+(good===symbols.length?'ok':good?'':'bad');
+   $('connection-text').textContent=good+'/'+symbols.length+' cotizaciones utilizables';
+   $('api-dot').className='dot '+(data.ok?'ok':'bad');
+   $('api-status').textContent=data.ok?'API conectada · respuesta recibida':'API respondió con errores en una o más acciones';
+   $('quality-summary').textContent=good+' de '+symbols.length+' cotizaciones cumplen frescura, mercado abierto y ausencia de retraso según metadata del proveedor.';
+   $('updated').textContent='Última consulta: '+new Date().toLocaleString('es-CR',{hour12:false})+' · Captura puntual de eToro';
+ }catch(e){
+   $('connection-dot').className='dot bad';$('connection-text').textContent='Conexión con error';
+   $('api-dot').className='dot bad';$('api-status').textContent='No se pudo actualizar: '+e.message;
+   $('updated').textContent='Último intento: '+new Date().toLocaleString('es-CR',{hour12:false});
+ }finally{btn.disabled=false}
+}
+$('refresh').addEventListener('click',refresh);refresh();setInterval(refresh,30000);
+</script>
+</body>
+</html>
++a.stop:'')).join(' | ');strategyEvaluationResults[item.id]='Prueba sintética · '+data.ticks_processed+' ticks · '+(signals||'sin señales')+' · sin órdenes reales.';}catch(error){strategyEvaluationResults[item.id]='Error en la prueba del motor: '+error.message;}renderStrategies();return;
+ }
+ if(button.dataset.action==='toggle'&&(item.strategyType||'formula')==='formula'){item.enabled=!item.enabled;persistStrategies();renderStrategies()}
+ if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;strategyType.value=item.strategyType||'formula';strategyType.dispatchEvent(new Event('change'));strategyAllocation.value=String(item.allocationPercent??10);updateBudgetPreview();$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
  if(button.dataset.action==='delete'){if(!confirm('¿Borrar la estrategia «'+item.name+'»?'))return;strategies=strategies.filter(s=>s.id!==item.id);if(editingStrategyId===item.id)resetStrategyForm();persistStrategies();renderStrategies()}
 });
 loadStrategies();renderStrategies();if(cloudToken)connectStrategyStorage();
