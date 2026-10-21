@@ -39,8 +39,15 @@ def _parse(formula):
         raise StrategyFormulaError("La fórmula supera el máximo de 50000 caracteres.")
     try:
         tree = ast.parse(formula, mode="exec")
-    except (SyntaxError, ValueError, TypeError, RecursionError):
-        raise StrategyFormulaError("Sintaxis Python no válida; revisa la indentación.") from None
+    except SyntaxError as exc:
+        line = exc.lineno or "desconocida"
+        column = exc.offset or "desconocida"
+        reason = (exc.msg or "error de sintaxis")[:160]
+        raise StrategyFormulaError(
+            f"Sintaxis Python no válida en línea {line}, columna {column}: {reason}. Revisa la indentación y la sintaxis."
+        ) from None
+    except (ValueError, TypeError, RecursionError):
+        raise StrategyFormulaError("No se pudo analizar la fórmula; revisa la sintaxis, la indentación y su complejidad.") from None
     if not tree.body:
         raise StrategyFormulaError("Fórmula vacía o demasiado compleja.")
     if sum(1 for _ in ast.walk(tree)) > MAX_AST_NODES:
