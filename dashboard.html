@@ -56,13 +56,14 @@
     </div>
   </div>
   <form id="strategy-form" class="strategy-form">
-    <div class="field"><label for="strategy-name">Nombre de la estrategia</label><input id="strategy-name" maxlength="80" placeholder="Ej. Ruptura de apertura" required></div>
-    <div class="field"><label for="strategy-formula">Fórmula / reglas de la estrategia</label><textarea id="strategy-formula" maxlength="50000" placeholder="Pega aquí tu fórmula Python (hasta 50.000 caracteres), conservando saltos de línea e indentación" required></textarea></div>
+    <div class="field"><label for="strategy-name">Nombre de la estrategia</label><input id="strategy-name" maxlength="80" placeholder="Ej. Momentum Tramos" required></div>
+    <div class="field"><label for="strategy-type">Tipo de estrategia</label><select id="strategy-type"><option value="python_program">Programa Python completo (clases/indicadores/estado)</option><option value="formula">Fórmula simple</option></select></div>
+    <div class="field full"><label for="strategy-formula">Código o fórmula de la estrategia</label><textarea id="strategy-formula" maxlength="50000" placeholder="Pega el programa Python completo, conservando saltos de línea e indentación (hasta 50.000 caracteres)" required></textarea><span class="status-note" id="strategy-type-help">Se validará la sintaxis y se guardará el código completo. No se ejecuta hasta integrar y probar el motor específico.</span></div>
     <div class="field"><label for="strategy-allocation">Porcentaje del capital general para esta estrategia (%)</label><input id="strategy-allocation" type="number" min="0" max="100" step="0.01" value="10" required><span class="status-note">Cada estrategia usa su porcentaje independiente del monto general.</span></div>
     <div class="field"><label>Presupuesto calculado</label><div id="strategy-budget-preview" class="status-note">$0.00 asignados · cálculo informativo</div></div>
     <div class="field full"><div class="form-actions"><button type="submit" id="strategy-save">＋ Guardar estrategia</button><button type="button" class="secondary" id="strategy-validate">Validar fórmula</button><button type="button" class="secondary" id="strategy-cancel" hidden>Cancelar edición</button><span id="strategy-validation-status" class="status-note" role="status" aria-live="polite"></span></div></div>
   </form>
-  <div class="status-note"><strong>Importante:</strong> el validador admite un subconjunto seguro de Python en varias líneas: asignaciones, if/else, comparaciones, AND/OR/NOT y abs/min/max/round. Ejemplo: <code>entry = price &gt; 5 and rvol &gt;= 2</code> y después <code>entry and change_pct &gt; 1</code>. Variables disponibles: price, bid, ask, change_pct, gap_pct, volume, rvol, premarket_change_pct, float_shares, ema20, macd, macd_signal, bollinger_upper y bollinger_lower. Cada variable necesita datos reales; las variables sin datos bloquean la evaluación y nunca se inventan. Sin almacenamiento compartido, las estrategias se guardan solo en este navegador. Conectado, se guardan en PostgreSQL. No envían órdenes; Tradeboot permanece en modo de solo lectura.</div>
+  <div class="status-note"><strong>Importante:</strong> las fórmulas simples usan un subconjunto seguro de Python. Los programas completos se validan sintácticamente y se guardan por separado; no se ejecutan hasta integrar y probar su motor específico. Ninguna estrategia envía órdenes reales. Para las fórmulas simples: asignaciones, if/else, comparaciones, AND/OR/NOT y abs/min/max/round. Ejemplo: <code>entry = price &gt; 5 and rvol &gt;= 2</code> y después <code>entry and change_pct &gt; 1</code>. Variables disponibles: price, bid, ask, change_pct, gap_pct, volume, rvol, premarket_change_pct, float_shares, ema20, macd, macd_signal, bollinger_upper y bollinger_lower. Cada variable necesita datos reales; las variables sin datos bloquean la evaluación y nunca se inventan. Sin almacenamiento compartido, las estrategias se guardan solo en este navegador. Conectado, se guardan en PostgreSQL. No envían órdenes; Tradeboot permanece en modo de solo lectura.</div>
   <div class="strategy-list" id="strategy-list"><div class="empty-strategies">Todavía no has creado estrategias. Usa el formulario para añadir la primera.</div></div>
 </section>
 
@@ -83,7 +84,15 @@ let generalCapital=Number(localStorage.getItem('tradeboot.generalCapital.v1')||0
 let cloudToken=sessionStorage.getItem('tradeboot.strategyAdminToken')||'';
 const strategyEvaluationResults={};
 const strategyName=$('strategy-name'), strategyFormula=$('strategy-formula');
-const strategyAllocation=$('strategy-allocation');
+const strategyType=$('strategy-type'), strategyAllocation=$('strategy-allocation');
+let validatedProgramText='';
+strategyType.addEventListener('change',()=>{
+ const program=strategyType.value==='python_program';
+ $('strategy-type-help').textContent=program?'Se validará la sintaxis y se guardará el código completo. No se ejecuta hasta integrar y probar el motor específico.':'Se validará y evaluará como fórmula con el subconjunto seguro de Python.';
+ $('strategy-validate').textContent=program?'Validar sintaxis Python':'Validar fórmula';
+ strategyFormula.placeholder=program?'Pega el programa Python completo, conservando saltos de línea e indentación (hasta 50.000 caracteres)':'Pega una fórmula compatible, por ejemplo: price > 5 and rvol >= 2';
+ validatedProgramText='';
+});
 function moneyUSD(value){return Number(value||0).toLocaleString('en-US',{style:'currency',currency:'USD'});}
 function updateBudgetPreview(){const pct=Number(strategyAllocation.value);const valid=Number.isFinite(pct)&&pct>=0&&pct<=100;$('strategy-budget-preview').textContent=moneyUSD(valid?generalCapital*pct/100:0)+' asignados · cálculo informativo';}
 function loadGeneralCapital(){$('strategy-capital').value=String(generalCapital);updateBudgetPreview();}
@@ -131,10 +140,10 @@ function renderStrategies(){
  $('strategy-count').textContent=strategies.length+' estrategia'+(strategies.length===1?'':'s');
  const list=$('strategy-list');
  if(!strategies.length){list.innerHTML='<div class="empty-strategies">Todavía no has creado estrategias. Usa el formulario para añadir la primera.</div>';return}
- list.innerHTML=strategies.map(s=>'<article class="strategy-item '+(s.enabled?'enabled':'')+'"><div class="strategy-title"><div><h3>'+escapeHtml(s.name)+'</h3><div class="company">'+(s.enabled?'ACTIVADA · CONFIGURACIÓN':'DESACTIVADA')+'</div></div><span class="tag '+(s.enabled?'good':'warn')+'">'+(s.enabled?'ON':'OFF')+'</span></div><div class="strategy-formula">'+escapeHtml(s.formula)+'</div><div class="status-note">'+escapeHtml(s.enabled?(strategyEvaluationResults[s.id]||"Esperando evaluación de cotizaciones utilizables."):"Estrategia desactivada; no se evalúa.")+'</div><div class="strategy-actions"><button type="button" data-action="toggle" data-id="'+escapeHtml(s.id)+'" class="secondary">'+(s.enabled?'Desactivar':'Activar')+'</button><button type="button" data-action="edit" data-id="'+escapeHtml(s.id)+'" class="secondary">Editar</button><button type="button" data-action="delete" data-id="'+escapeHtml(s.id)+'" class="danger">Borrar</button></div></article>').join('');
+ list.innerHTML=strategies.map(s=>{const program=(s.strategyType||'formula')==='python_program';return '<article class="strategy-item '+(s.enabled?'enabled':'')+'"><div class="strategy-title"><div><h3>'+escapeHtml(s.name)+'</h3><div class="company">'+(program?'PYTHON COMPLETO · MOTOR PENDIENTE':s.enabled?'ACTIVADA · CONFIGURACIÓN':'DESACTIVADA')+'</div></div><span class="tag '+(s.enabled?'good':'warn')+'">'+(program?'CÓDIGO':s.enabled?'ON':'OFF')+'</span></div><div class="strategy-formula">'+escapeHtml(s.formula)+'</div><div class="status-note">'+escapeHtml(program?'Código guardado; el motor específico aún no está conectado.':s.enabled?(strategyEvaluationResults[s.id]||"Esperando evaluación de cotizaciones utilizables."):"Estrategia desactivada; no se evalúa.")+'</div><div class="strategy-actions"><button type="button" data-action="toggle" data-id="'+escapeHtml(s.id)+'" class="secondary" '+(program?'disabled title="El motor específico aún no está conectado"':'')+'>'+(s.enabled?'Desactivar':'Activar')+'</button><button type="button" data-action="edit" data-id="'+escapeHtml(s.id)+'" class="secondary">Editar</button><button type="button" data-action="delete" data-id="'+escapeHtml(s.id)+'" class="danger">Borrar</button></div></article>'}).join('');
 }
 async function evaluateActiveStrategies(resultsBySymbol){
- const active=strategies.filter(s=>s.enabled);
+ const active=strategies.filter(s=>s.enabled&&(s.strategyType||'formula')==='formula');
  if(!active.length)return;
  const usable=Object.values(resultsBySymbol||{}).filter(r=>r&&r.ok&&r.quote_is_usable===true);
  for(const s of active)strategyEvaluationResults[s.id]='Evaluando condiciones…';
@@ -175,30 +184,33 @@ async function evaluateActiveStrategies(resultsBySymbol){
 function resetStrategyForm(){editingStrategyId=null;$('strategy-form').reset();strategyAllocation.value='10';updateBudgetPreview();$('strategy-save').textContent='＋ Guardar estrategia';$('strategy-cancel').hidden=true;$('strategy-validation-status').textContent=''}
 $('strategy-form').addEventListener('submit',event=>{
  event.preventDefault();
- const name=strategyName.value.trim(),formula=strategyFormula.value.trim(),allocationPercent=Number(strategyAllocation.value);
- if(!name||!formula)return;
+ const name=strategyName.value.trim(),formula=strategyFormula.value,strategyTypeValue=strategyType.value,allocationPercent=Number(strategyAllocation.value);
+ if(!name||!formula.trim())return;
+ if(strategyTypeValue==='python_program'&&validatedProgramText!==formula){$('strategy-validation-status').textContent='Valida primero la sintaxis Python y luego guarda el programa.';return;}
  if(!Number.isFinite(allocationPercent)||allocationPercent<0||allocationPercent>100){$('strategy-validation-status').textContent='El porcentaje debe estar entre 0 y 100.';return;}
- if(editingStrategyId){const item=strategies.find(s=>s.id===editingStrategyId);if(item){item.name=name;item.formula=formula;item.allocationPercent=allocationPercent}}
- else{strategies.push({id:(typeof crypto!=='undefined'&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2),name,formula,enabled:false,allocationPercent,createdAt:new Date().toISOString()})}
+ if(editingStrategyId){const item=strategies.find(s=>s.id===editingStrategyId);if(item){item.name=name;item.formula=formula;item.strategyType=strategyTypeValue;item.allocationPercent=allocationPercent}}
+ else{strategies.push({id:(typeof crypto!=='undefined'&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2),name,formula,strategyType:strategyTypeValue,enabled:false,allocationPercent,createdAt:new Date().toISOString()})}
  try{persistStrategies();renderStrategies();resetStrategyForm()}catch(_){alert('No se pudo guardar en el almacenamiento local de este navegador.')}
 });
 $('strategy-validate').addEventListener('click',async()=>{
- const formula=strategyFormula.value.trim(), status=$('strategy-validation-status');
- if(!formula){status.textContent='Pega una fórmula antes de validarla.';return}
+ const formula=strategyFormula.value, type=strategyType.value, status=$('strategy-validation-status');
+ if(!formula.trim()){status.textContent='Pega el código o fórmula antes de validar.';return}
  status.textContent='Validando…';
  try{
-  const response=await fetch('/strategies/validate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({formula,validate_only:true}),cache:'no-store'});
+  const endpoint=type==='python_program'?'/strategies/validate-program':'/strategies/validate';
+  const response=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({formula,validate_only:true}),cache:'no-store'});
   const data=await response.json();
   if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'No se pudo validar');
-  status.textContent='Fórmula válida · variables: '+(data.variables.length?data.variables.join(', '):'ninguna');
- }catch(error){status.textContent='Fórmula no válida: '+error.message}
+  if(type==='python_program'){validatedProgramText=formula;status.textContent='Sintaxis Python válida · '+data.line_count+' líneas · ya puedes guardar el código.';}
+  else status.textContent='Fórmula válida · variables: '+(data.variables.length?data.variables.join(', '):'ninguna');
+ }catch(error){validatedProgramText='';status.textContent='Validación no válida: '+error.message}
 });
 $('strategy-cancel').addEventListener('click',resetStrategyForm);
 $('strategy-list').addEventListener('click',event=>{
  const button=event.target.closest('button[data-action]');if(!button)return;
  const item=strategies.find(s=>s.id===button.dataset.id);if(!item)return;
- if(button.dataset.action==='toggle'){item.enabled=!item.enabled;persistStrategies();renderStrategies()}
- if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;strategyAllocation.value=String(item.allocationPercent??10);updateBudgetPreview();$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
+ if(button.dataset.action==='toggle'&&(item.strategyType||'formula')==='formula'){item.enabled=!item.enabled;persistStrategies();renderStrategies()}
+ if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;strategyType.value=item.strategyType||'formula';strategyType.dispatchEvent(new Event('change'));strategyAllocation.value=String(item.allocationPercent??10);updateBudgetPreview();$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
  if(button.dataset.action==='delete'){if(!confirm('¿Borrar la estrategia «'+item.name+'»?'))return;strategies=strategies.filter(s=>s.id!==item.id);if(editingStrategyId===item.id)resetStrategyForm();persistStrategies();renderStrategies()}
 });
 loadStrategies();renderStrategies();if(cloudToken)connectStrategyStorage();
