@@ -108,7 +108,7 @@ def open_market_order(
         raise EtoroExecutionError("leverage_must_be_one")
     payload = {
         "action": "open",
-        "transaction": "buy" if is_buy else "sell",
+        "transaction": "buy" if is_buy else "sellShort",
         "instrumentId": instrument_id,
         "orderType": "mkt",
         "amount": amount,
