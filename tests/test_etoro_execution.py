@@ -47,11 +47,12 @@ class EtoroExecutionTests(unittest.TestCase):
         with patch.object(execution, "urlopen", fake_urlopen):
             result = execution.open_market_order(123, 25, True, stop_loss_rate=9.5)
         self.assertTrue(result["ok"])
-        self.assertIn("/trading/execution/demo/market-open-orders/by-amount", seen["url"])
+        self.assertIn("/api/v2/trading/execution/demo/orders", seen["url"])
         self.assertEqual(seen["method"], "POST")
         self.assertEqual(seen["body"], {
-            "InstrumentId": 123, "Amount": 25.0, "Leverage": 1,
-            "IsBuy": True, "StopLossRate": 9.5,
+            "action": "open", "transaction": "buy", "instrumentId": 123,
+            "orderType": "mkt", "amount": 25.0, "orderCurrency": "usd",
+            "leverage": 1, "stopLossRate": 9.5,
         })
 
     def test_order_above_cap_is_rejected(self):
@@ -84,8 +85,8 @@ class EtoroExecutionTests(unittest.TestCase):
         with patch.object(execution, "urlopen", fake_urlopen):
             result = execution.close_market_position(4567)
         self.assertTrue(result["ok"])
-        self.assertTrue(seen["url"].endswith("/trading/execution/demo/market-close-orders/positions/4567"))
-        self.assertEqual(seen["body"], {"UnitsToDeduct": None})
+        self.assertTrue(seen["url"].endswith("/api/v2/trading/execution/demo/orders"))
+        self.assertEqual(seen["body"], {"action": "close", "positionId": 4567})
 
 
 if __name__ == "__main__":
