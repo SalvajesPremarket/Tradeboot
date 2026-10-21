@@ -23,7 +23,7 @@ class EtoroExecutionTests(unittest.TestCase):
     def test_execution_disabled_by_default(self):
         os.environ.pop("ETORO_TRADING_ENABLED", None)
         os.environ.pop("ETORO_TRADING_MODE", None)
-        with self.assertRaisesRegex(execution.EtoroExecutionError, "trading_mode_disabled"):
+        with self.assertRaisesRegex(execution.EtoroExecutionError, "demo_mode_required"):
             execution.open_market_order(123, 10, True)
 
     def test_open_order_uses_demo_path_and_caps_amount(self):
@@ -105,10 +105,10 @@ class EtoroExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(execution.EtoroExecutionError, "order_amount_outside_configured_limit"):
             execution.open_market_order(123, 101, True)
 
-    def test_live_mode_requires_explicit_acknowledgement(self):
+    def test_real_money_mode_is_rejected_even_if_configured(self):
         os.environ["ETORO_TRADING_MODE"] = "real"
-        os.environ.pop("ETORO_LIVE_TRADING_ACK", None)
-        with self.assertRaisesRegex(execution.EtoroExecutionError, "live_trading_acknowledgement_required"):
+        os.environ["ETORO_LIVE_TRADING_ACK"] = execution.LIVE_ACK if hasattr(execution, "LIVE_ACK") else "I_UNDERSTAND_REAL_MONEY_RISK"
+        with self.assertRaisesRegex(execution.EtoroExecutionError, "demo_mode_required"):
             execution.open_market_order(123, 10, True)
 
     def test_close_uses_position_id_and_demo_path(self):
