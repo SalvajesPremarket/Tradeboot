@@ -125,9 +125,65 @@ def close_market_position(position_id: int) -> dict:
     mode, _, _, _ = _configuration()
     if isinstance(position_id, bool) or not isinstance(position_id, int) or position_id <= 0:
         raise EtoroExecutionError("invalid_position_id")
-    prefix = "trading/execution/demo/" if mode == "demo" else "trading/execution/"
-    return _request(
-        "POST",
-        prefix + "orders",
-        {"action": "close", "positionId": position_id},
+    # The documented close flow requires an instrument ID; do not guess it.
+    raise EtoroExecutionError("close_requires_instrument_id_use_close_demo_position")
+
+
+def close_demo_position(position_id: int, instrument_id: int) -> dict:
+    """Submit a full close via eToro Demo v1; acceptance is not final confirmation."""
+    mode, api_key, user_key, _ = _configuration()
+    if mode != "demo":
+        raise EtoroExecutionError("demo_mode_required")
+    for name, value in (("position_id", position_id), ("instrument_id", instrument_id)):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise EtoroExecutionError("invalid_" + name)
+    request_id = str(uuid.uuid4())
+    request = Request(
+        BASE_URL.replace("/api/v2/", "/api/v1/") +
+        "trading/execution/demo/market-close-orders/positions/" + str(position_id),
+        data=json.dumps({"InstrumentID": instrument_id, "UnitsToDeduct": None}).encode("utf-8"),
+        headers={
+            "x-api-key": api_key, "x-user-key": user_key, "x-request-id": request_id,
+            "Accept": "application/json", "Content-Type": "application/json",
+            "User-Agent": "Tradeboot/1.0",
+        },
+        method="POST",
     )
+    try:
+        with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            raw = response.read(65536).decode("utf-8", errors="replace")
+            try:
+                data = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                data = {"response_received": bool(raw)}
+            if not isinstance(data, dict):
+                data = {"response_received": True}
+            return {"ok": True, "mode": "demo", "http_status": response.status,
+                    "request_id": request_id, "data": data, "confirmation_required": True}
+    except HTTPError as exc:
+        raise EtoroExecutionError(f"etoro_close_rejected_http_{exc.code}") from None
+    except (URLError, TimeoutError, OSError, ValueError):
+        raise EtoroExecutionError("etoro_close_request_failed") from None
+
+
+def get_demo_portfolio() -> dict:
+    """Read current Demo portfolio; this does not execute trades."""
+    mode, api_key, user_key, _ = _configuration()
+    if mode != "demo":
+        raise EtoroExecutionError("demo_mode_required")
+    request = Request(
+        BASE_URL.replace("/api/v2/", "/api/v1/") + "trading/info/demo/portfolio",
+        headers={"x-api-key": api_key, "x-user-key": user_key,
+                 "x-request-id": str(uuid.uuid4()), "Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            raw = response.read(65536).decode("utf-8", errors="replace")
+            data = json.loads(raw) if raw else {}
+            return {"ok": True, "mode": "demo", "http_status": response.status,
+                    "data": data if isinstance(data, dict) else {}}
+    except HTTPError as exc:
+        raise EtoroExecutionError(f"etoro_portfolio_rejected_http_{exc.code}") from None
+    except (URLError, TimeoutError, OSError, ValueError):
+        raise EtoroExecutionError("etoro_portfolio_request_failed") from None
