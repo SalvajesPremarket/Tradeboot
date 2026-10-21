@@ -30,6 +30,7 @@ def list_strategies():
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 formula TEXT NOT NULL,
+                strategy_type TEXT NOT NULL DEFAULT 'formula',
                 enabled BOOLEAN NOT NULL DEFAULT FALSE,
                 allocation_percent DOUBLE PRECISION NOT NULL DEFAULT 10,
                 created_at TIMESTAMPTZ NOT NULL,
@@ -37,12 +38,14 @@ def list_strategies():
             )
         """)
         conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS allocation_percent DOUBLE PRECISION NOT NULL DEFAULT 10")
+        conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS strategy_type TEXT NOT NULL DEFAULT 'formula'")
         rows = conn.execute(
-            "SELECT id, name, formula, enabled, created_at, allocation_percent FROM tradeboot_strategies ORDER BY created_at, id"
+            "SELECT id, name, formula, enabled, created_at, allocation_percent, strategy_type FROM tradeboot_strategies ORDER BY created_at, id"
         ).fetchall()
     return [{
         "id": row[0], "name": row[1], "formula": row[2], "enabled": row[3],
         "createdAt": row[4].isoformat(), "allocationPercent": float(row[5]),
+        "strategyType": row[6] or "formula",
     } for row in rows]
 
 
@@ -55,6 +58,7 @@ def replace_strategies(items):
         sid = item.get("id")
         name = item.get("name")
         formula = item.get("formula")
+        strategy_type = item.get("strategyType", "formula")
         enabled = item.get("enabled", False)
         allocation_percent = item.get("allocationPercent", 10)
         created = item.get("createdAt")
@@ -62,8 +66,10 @@ def replace_strategies(items):
             raise ValueError("Strategy ID is invalid.")
         if not isinstance(name, str) or not name.strip() or len(name.strip()) > 80:
             raise ValueError("Strategy name must contain 1 to 80 characters.")
-        if not isinstance(formula, str) or not formula.strip() or len(formula) > 1000:
-            raise ValueError("Strategy formula must contain 1 to 1000 characters.")
+        if strategy_type not in ("formula", "python_program"):
+            raise ValueError("Strategy type is invalid.")
+        if not isinstance(formula, str) or not formula.strip() or len(formula) > 50000:
+            raise ValueError("Strategy source must contain 1 to 50000 characters.")
         if not isinstance(enabled, bool):
             raise ValueError("Strategy enabled flag must be boolean.")
         if isinstance(allocation_percent, bool) or not isinstance(allocation_percent, (int, float)) or not 0 <= allocation_percent <= 100:
@@ -74,7 +80,7 @@ def replace_strategies(items):
                 created_at = created_at.replace(tzinfo=timezone.utc)
         except (ValueError, OverflowError):
             created_at = now
-        normalized.append((sid, name.strip(), formula.strip(), enabled, float(allocation_percent), created_at, now))
+        normalized.append((sid, name.strip(), formula, strategy_type, enabled, float(allocation_percent), created_at, now))
     if len(normalized) > 1000:
         raise ValueError("A maximum of 1000 strategies is supported.")
     with _connect() as conn:
@@ -90,12 +96,13 @@ def replace_strategies(items):
                 )
             """)
             conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS allocation_percent DOUBLE PRECISION NOT NULL DEFAULT 10")
+            conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS strategy_type TEXT NOT NULL DEFAULT 'formula'")
             conn.execute("DELETE FROM tradeboot_strategies")
             if normalized:
                 conn.executemany("""
                     INSERT INTO tradeboot_strategies
-                    (id, name, formula, enabled, allocation_percent, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    (id, name, formula, strategy_type, enabled, allocation_percent, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """, normalized)
     return list_strategies()
 
