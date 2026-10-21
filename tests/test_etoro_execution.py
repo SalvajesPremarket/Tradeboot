@@ -10,7 +10,7 @@ class EtoroExecutionTests(unittest.TestCase):
     def setUp(self):
         self.env = patch.dict(os.environ, {
             "ETORO_API_KEY": "public-key",
-            "ETORO_USER_KEY": "user-key",
+            "ETORO_DEMO_USER_KEY": "demo-user-key", "ETORO_REAL_USER_KEY": "real-user-key",
             "ETORO_TRADING_ENABLED": "true",
             "ETORO_TRADING_MODE": "demo",
             "ETORO_MAX_ORDER_AMOUNT_USD": "100",
