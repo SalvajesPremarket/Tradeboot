@@ -5,7 +5,10 @@ import ast
 import math
 import operator
 
-MAX_FORMULA_LENGTH = 1000
+MAX_FORMULA_LENGTH = 50000
+MAX_AST_NODES = 12000
+MAX_BLOCK_STATEMENTS = 1000
+MAX_NESTING_DEPTH = 30
 CATALOG = {
     "price": "Precio actual", "bid": "Precio bid", "ask": "Precio ask",
     "change_pct": "Cambio porcentual", "gap_pct": "Gap porcentual",
@@ -33,13 +36,15 @@ def _parse(formula):
     if not isinstance(formula, str) or not formula.strip():
         raise StrategyFormulaError("Escribe una fórmula.")
     if len(formula) > MAX_FORMULA_LENGTH:
-        raise StrategyFormulaError("La fórmula supera el máximo de 1000 caracteres.")
+        raise StrategyFormulaError("La fórmula supera el máximo de 50000 caracteres.")
     try:
         tree = ast.parse(formula, mode="exec")
-    except (SyntaxError, ValueError, TypeError):
+    except (SyntaxError, ValueError, TypeError, RecursionError):
         raise StrategyFormulaError("Sintaxis Python no válida; revisa la indentación.") from None
-    if not tree.body or sum(1 for _ in ast.walk(tree)) > 160:
+    if not tree.body:
         raise StrategyFormulaError("Fórmula vacía o demasiado compleja.")
+    if sum(1 for _ in ast.walk(tree)) > MAX_AST_NODES:
+        raise StrategyFormulaError("La fórmula supera el límite seguro de complejidad.")
     return tree
 
 
@@ -100,7 +105,7 @@ def _expr(n, env):
 
 
 def _block(statements, env, depth=0):
-    if depth > 8 or len(statements) > 40: raise StrategyFormulaError("Demasiadas instrucciones o niveles if/else.")
+    if depth > MAX_NESTING_DEPTH or len(statements) > MAX_BLOCK_STATEMENTS: raise StrategyFormulaError("La fórmula supera el límite seguro de instrucciones o niveles if/else.")
     result = None
     for s in statements:
         if isinstance(s, ast.Assign) and len(s.targets) == 1 and isinstance(s.targets[0], ast.Name):
@@ -130,9 +135,11 @@ def validate_formula(formula):
     )
     if any(not isinstance(node, allowed_nodes) for node in ast.walk(tree)):
         raise StrategyFormulaError("Esta instrucción o sintaxis Python no está permitida.")
-    def check_statements(statements):
-        if len(statements) > 40:
-            raise StrategyFormulaError("Demasiadas instrucciones.")
+    def check_statements(statements, depth=0):
+        if depth > MAX_NESTING_DEPTH:
+            raise StrategyFormulaError("La fórmula supera el límite seguro de niveles if/else.")
+        if len(statements) > MAX_BLOCK_STATEMENTS:
+            raise StrategyFormulaError("La fórmula supera el límite seguro de instrucciones.")
         for statement in statements:
             if isinstance(statement, ast.Assign):
                 if len(statement.targets) != 1 or not isinstance(statement.targets[0], ast.Name):
@@ -141,8 +148,8 @@ def validate_formula(formula):
                 if name.startswith("_") or name in FUNCS or name in CATALOG:
                     raise StrategyFormulaError("No se permite sobrescribir una variable de mercado o función: " + name)
             elif isinstance(statement, ast.If):
-                check_statements(statement.body)
-                check_statements(statement.orelse)
+                check_statements(statement.body, depth + 1)
+                check_statements(statement.orelse, depth + 1)
             elif not isinstance(statement, ast.Expr):
                 raise StrategyFormulaError("Instrucción Python no permitida: " + type(statement).__name__ + ".")
     check_statements(tree.body)

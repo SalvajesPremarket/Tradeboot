@@ -648,9 +648,9 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", "0"))
         except (TypeError, ValueError):
             return self._json(400, {"ok": False, "error": "invalid_content_length"})
-        if length < 1 or length > 16384:
-            return self._json(413 if length > 16384 else 400, {
-                "ok": False, "error": "request_body_size_invalid", "max_bytes": 16384,
+        if length < 1 or length > 262144:
+            return self._json(413 if length > 262144 else 400, {
+                "ok": False, "error": "request_body_size_invalid", "max_bytes": 262144,
             })
         try:
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
