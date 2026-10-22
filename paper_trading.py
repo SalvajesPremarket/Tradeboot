@@ -28,6 +28,7 @@ _thread = None
 _stream_thread = None
 _program_bots = {}
 _history_cache = {}
+_last_context_refresh = {}
 _instrument_cache = {}
 _stream_state = {"status": "starting", "last_tick_at": None, "symbols": list(_SYMBOLS), "tick_count": 0}
 _STREAM_TICK_LOCK = threading.Lock()
@@ -349,6 +350,51 @@ def _build_program_bot(strategy, symbol, history):
             "strategy": strategy, "symbol": symbol}, None
 
 
+
+def _refresh_pullback_contexts(symbol, tick_at, price, day_volume):
+    """Refresh daily/weekly context from provider OHLCV plus actual received ticks."""
+    history = _history_for(symbol, instrument_id)
+    daily_rows = history.get("daily", [])
+    if not daily_rows:
+        return
+    last = daily_rows[-1]
+    # Update the provider's current-session daily bar only when dates agree; never
+    # synthesize an OHLC candle for a session the provider did not return.
+    if str(last.get("timestamp", ""))[:10] == tick_at.date().isoformat():
+        last["high"] = max(float(last["high"]), float(price))
+        last["low"] = min(float(last["low"]), float(price))
+        last["close"] = float(price)
+        if day_volume is not None:
+            last["volume"] = float(day_volume)
+    now = time.monotonic()
+    if now - _last_context_refresh.get(symbol, 0) < 60:
+        return
+    _last_context_refresh[symbol] = now
+    try:
+        import pandas as pd
+        daily_frame_rows = [row for row in daily_rows if row.get("timestamp") and row.get("volume") is not None]
+        if len(daily_frame_rows) < 200:
+            return
+        frame = pd.DataFrame([{k: row[k] for k in ("open", "high", "low", "close", "volume")}
+                              for row in daily_frame_rows],
+                             index=pd.DatetimeIndex([row["timestamp"] for row in daily_frame_rows]))
+        frame = frame[~frame.index.duplicated(keep="last")].sort_index()
+        today = tick_at.date().isoformat()
+        completed = [row for row in daily_frame_rows if str(row["timestamp"])[:10] < today]
+        volumes = [float(row["volume"]) for row in completed[-30:]]
+        info = {"symbol": symbol, "avg_volume_30d": sum(volumes) / len(volumes) if volumes else None,
+                "float_shares": None}
+        for (strategy_id, bot_symbol), entry in list(_program_bots.items()):
+            if bot_symbol != symbol or entry.get("kind") != "pullback":
+                continue
+            module = entry["module"]
+            entry["bot"].set_context(module.daily_context(frame, info, "D"),
+                                     module.daily_context(module.to_weekly(frame), info, "W"))
+    except Exception as exc:
+        with _STREAM_TICK_LOCK:
+            _stream_state["last_error"] = "daily_context_refresh:"+type(exc).__name__
+
+
 def _record_program_action(strategy, symbol, action, price, tick_at):
     kind = str(action.get("action", "")).upper()
     side = str(action.get("side", "LONG")).upper()
@@ -434,6 +480,7 @@ def _process_stream_tick(tick, active_strategies):
                      (symbol,symbol))
         conn.execute("""UPDATE tradeboot_paper_trades SET last_price=%s,last_quote_at=%s
                         WHERE symbol=%s AND status='OPEN'""", (price,tick_at,symbol))
+    _refresh_pullback_contexts(symbol, tick_at, price, day_volume)
     desired = {str(s["id"]): s for s in active_strategies
                if s.get("enabled") and s.get("strategyType") == "python_program"}
     for key in list(_program_bots):
