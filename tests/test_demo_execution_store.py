@@ -11,6 +11,9 @@ class FakeCursor:
     def fetchone(self):
         return self.row
 
+    def fetchall(self):
+        return self.row if isinstance(self.row, list) else []
+
 
 class FakeTransaction:
     def __enter__(self):
