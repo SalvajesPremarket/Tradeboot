@@ -6,9 +6,14 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 
 - API HTTP de solo lectura conectada a los endpoints REST de datos de mercado de eToro.
 - Dashboard que actualiza snapshots puntuales de hasta cinco símbolos cada 30 segundos y evalúa las estrategias activadas como señales simuladas.
-- Endpoint de diagnóstico WebSocket que autentica, solicita snapshots y cierra la conexión; todavía no es un consumidor continuo de streaming.
+- Endpoint de diagnóstico WebSocket que autentica, solicita snapshots y cierra la conexión; se mantiene separado del consumidor continuo.
+- `market_stream_worker.py` es un consumidor WebSocket persistente de solo lectura. Resuelve coincidencias exactas de 1–5 símbolos, se suscribe con `snapshot:false`, reintenta la conexión con espera incremental y solo acepta mensajes con precio y timestamp explícitos. No llama endpoints de órdenes.
+- `etoro_stream_adapter.py` normaliza mensajes de precio y descarta temas desconocidos o datos incompletos. `strategy_market_runtime.py` agrega ticks aceptados a velas OHLC de un minuto y `market_candle_store.py` persiste velas cerradas en PostgreSQL con clave única por símbolo/minuto. El formato real del flujo y la escritura en la base de datos aún deben validarse en un entorno configurado; las estrategias Python seguirán sin estar listas hasta verificar también los contextos diario/semanal.
 - Indicadores de antigüedad, estado de mercado y señales de datos retrasados cuando eToro los proporciona.
-- No envía órdenes reales ni ejecuta operaciones. El trading automático permanece deshabilitado.
+- El escaneo `/engine/demo-scan` es de solo lectura: exige el token administrativo, evalúa hasta cinco símbolos con cotizaciones válidas y no infiere LONG/SHORT ni envía órdenes.
+- `demo_scan_worker.py` permite ciclos continuos de escaneo, sin órdenes, cada 30–3600 segundos. Configura `TRADEBOOT_SCAN_SYMBOLS` con 1–5 símbolos y `TRADEBOOT_SCAN_INTERVAL_SECONDS` (por defecto 60). Cada ciclo se guarda en PostgreSQL y se conserva un máximo de 2.000 ciclos; `GET /engine/demo-scan-history?limit=50` permite consultarlos con el token administrativo. En Render, debe configurarse como Background Worker con comando `python demo_scan_worker.py`, además de las variables `DATABASE_URL`, `ETORO_API_KEY` y `ETORO_USER_KEY` existentes. El proceso valida al arrancar la base de datos y las credenciales de eToro, y termina con un error claro si faltan.
+- Los workers son código publicado pero no quedan activos en Render automáticamente. El escáner REST y el consumidor WebSocket requieren servicios Background Worker separados y sus variables de entorno. Para streaming, configura `TRADEBOOT_STREAM_SYMBOLS` con 1–5 símbolos, además de `DATABASE_URL`, `ETORO_API_KEY` y `ETORO_USER_KEY`; el proceso `python market_stream_worker.py` no debe arrancarse como parte de la API HTTP.
+- La ejecución Demo de una sola evaluación sigue separada y protegida por límites; no se habilita trading real ni un bucle autónomo de órdenes.
 - Las estrategias se guardan localmente en el navegador salvo que se configure el almacenamiento compartido con `TRADEBOOT_STRATEGY_ADMIN_TOKEN` y la base de datos correspondiente.
 - La calidad de cotización no se puede confirmar completamente cuando el proveedor omite metadatos.
 
@@ -32,8 +37,15 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 - `GET /etoro/demo/portfolio` — consulta de cartera demo.
 - `POST /strategies/validate` — validar o evaluar una fórmula con los valores recibidos.
 - `POST /strategies/evaluate-market` — evaluar una fórmula con una cotización eToro que cumpla los controles de calidad.
+- `POST /engine/demo-scan` — escaneo autenticado de hasta cinco símbolos con la única estrategia de fórmula activada; solo informa señales y nunca envía órdenes.
+- `demo_scan_worker.py` — proceso continuo de escaneo REST de solo lectura para ejecutarse como Render Background Worker; usa `TRADEBOOT_SCAN_SYMBOLS` y `TRADEBOOT_SCAN_INTERVAL_SECONDS`.
+- `market_stream_worker.py` — consumidor WebSocket continuo de solo lectura para un Background Worker independiente; usa `TRADEBOOT_STREAM_SYMBOLS`, `DATABASE_URL`, `ETORO_API_KEY` y `ETORO_USER_KEY`.
+- `GET /engine/demo-scan-history?limit=50` — historial persistido de ciclos de escaneo, protegido por `TRADEBOOT_STRATEGY_ADMIN_TOKEN`; acepta límites de 1 a 200.
+- `GET /engine/demo-reconcile` — compara posiciones abiertas Demo con entradas recientes del ledger por instrumento, lado y monto; muestra coincidencias candidatas, ambigüedades y casos para revisión, sin confirmar ejecuciones automáticamente.
+- `GET /engine/demo-order-status?order_id=123` — consulta el estado y los detalles de una orden específica en eToro Demo mediante la API oficial de solo lectura; requiere autenticación administrativa y `ETORO_TRADING_MODE=demo`.
 - `POST /strategies/validate-program` — validar la sintaxis de un programa Python completo sin ejecutarlo.
 - `POST /strategies/simulate-momentum` — probar el motor integrado Momentum Tramos con velas/ticks sintéticos o históricos; requiere `X-Strategy-Admin-Token`, procesa como máximo 5.000 velas y 5.000 ticks, y solo emite señales simuladas.
+- `POST /strategies/simulate-program` — reproducir uno de los cuatro programas Python allowlisted con velas, ticks y contexto proporcionados por el usuario; requiere `X-Strategy-Admin-Token`, procesa hasta 2.000 velas iniciales y 5.000 ticks, y nunca envía órdenes. No reemplaza el runtime continuo.
 
 ## Campos de calidad
 

@@ -1,13 +1,15 @@
-"""Read-only HTTP interface for the isolated Tradeboot scaffold.
+"""HTTP interface for Tradeboot market data, strategy management, and guarded Demo execution.
 
-eToro requests are restricted to GET endpoints and use credentials from environment
-variables. No order placement or account-changing requests are implemented.
+Market-data routes are read-only. Order placement is limited to the authenticated
+Demo evaluation route and remains disabled unless explicitly enabled by environment
+configuration. This service does not run a continuous autonomous trading loop.
 """
 import json
 import os
 import math
 import uuid
 import hmac
+import hashlib
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
@@ -18,13 +20,151 @@ from tradeboot import Tradeboot
 from strategy_engine import StrategyFormulaError, evaluate_formula, validate_formula
 from strategy_program import validate_strategy_source
 from strategy_simulation import simulate_momentum
+from strategy_program_engine import evaluate_strategy_replay
 from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital
+from demo_execution_store import reserve_demo_execution, finish_demo_execution, list_demo_executions, list_demo_scan_cycles
+from etoro_execution import EtoroExecutionError, open_market_order, close_demo_position, get_demo_portfolio, get_demo_order_information, summarize_demo_order_status
 
 
 module = Tradeboot()
 ETORO_BASE_URL = "https://public-api.etoro.com/api/v1/"
 ETORO_TIMEOUT_SECONDS = 15
 DEFAULT_MAX_QUOTE_AGE_SECONDS = 300
+
+
+
+def demo_allocation_cap(general_capital, allocation_percent):
+    """Return the strategy's USD allocation ceiling or reject unsafe configuration."""
+    if (isinstance(general_capital, bool) or not isinstance(general_capital, (int, float))
+            or not math.isfinite(general_capital) or general_capital <= 0):
+        raise ValueError("valid_general_capital_required")
+    if (isinstance(allocation_percent, bool) or not isinstance(allocation_percent, (int, float))
+            or not math.isfinite(allocation_percent) or not 0 < allocation_percent <= 100):
+        raise ValueError("valid_strategy_allocation_required")
+    return float(general_capital) * float(allocation_percent) / 100.0
+
+
+def evaluate_demo_scan_snapshot(strategy, symbol, market):
+    """Evaluate one market snapshot without ever submitting an order."""
+    if isinstance(strategy, dict) and strategy.get("strategyType") == "python_program":
+        return {
+            "ok": False, "symbol": symbol,
+            "error": "python_program_requires_tick_runtime",
+            "runtime_ready": False,
+            "missing_inputs": ["closed_1m_candles", "continuous_ticks", "strategy_context"],
+            "execution": "not_attempted",
+        }
+    if not isinstance(strategy, dict) or strategy.get("strategyType") != "formula":
+        return {"ok": False, "symbol": symbol, "error": "unsupported_strategy_type", "execution": "not_attempted"}
+    if not isinstance(market, dict) or not market.get("ok"):
+        return {"ok": False, "symbol": symbol, "error": "market_context_unavailable", "execution": "not_attempted"}
+    if not market.get("quote_is_usable"):
+        return {
+            "ok": False, "symbol": symbol, "error": "quote_not_usable",
+            "quote_quality_status": market.get("quote_quality_status"),
+            "quote_time": market.get("quote_time"), "execution": "not_attempted",
+        }
+    try:
+        evaluation = evaluate_formula(strategy.get("formula", ""), market.get("market_values", {}))
+    except StrategyFormulaError as exc:
+        return {
+            "ok": False, "symbol": symbol, "error": "strategy_data_unavailable",
+            "detail": str(exc), "execution": "not_attempted",
+        }
+    return {
+        "ok": True, "symbol": symbol, "instrument_id": market.get("instrument_id"),
+        "quote_time": market.get("quote_time"), "quote_age_seconds": market.get("quote_age_seconds"),
+        "quote_quality_status": market.get("quote_quality_status"),
+        "signal_matched": bool(evaluation.get("matched")), "evaluation": evaluation,
+        "execution": "not_attempted",
+    }
+
+
+def reconcile_demo_snapshot(portfolio_response, executions):
+    """Compare ledger entries with current Demo positions without declaring fills."""
+    if not isinstance(portfolio_response, dict) or not isinstance(executions, list):
+        return {"status": "manual_review_required", "items": [], "positions": []}
+    data = portfolio_response.get("data", portfolio_response)
+    client = data.get("clientPortfolio", data) if isinstance(data, dict) else {}
+    positions = client.get("positions", []) if isinstance(client, dict) else []
+    # Some eToro responses expose positions at data.positions; others wrap them
+    # in clientPortfolio. Accept either response envelope without guessing fields.
+    if not positions and isinstance(data, dict) and isinstance(data.get("positions"), list):
+        positions = data["positions"]
+    if not isinstance(positions, list):
+        positions = []
+    normalized_positions = []
+    for position in positions:
+        if not isinstance(position, dict):
+            continue
+        instrument = position.get(
+            "instrumentId", position.get("InstrumentId", position.get(
+                "InstrumentID", position.get("instrument_id")
+            ))
+        )
+        side = position.get("isBuy", position.get("IsBuy", position.get("is_buy")))
+        amount = position.get("amount", position.get("Amount"))
+        position_id = position.get(
+            "positionId", position.get("PositionId", position.get(
+                "PositionID", position.get("position_id")
+            ))
+        )
+        if isinstance(instrument, bool) or not isinstance(instrument, int):
+            continue
+        if not isinstance(side, bool):
+            continue
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            amount = None
+        normalized_positions.append({
+            "position_id": position_id, "instrument_id": instrument,
+            "is_buy": side, "amount_usd": amount,
+        })
+
+    items = []
+    for execution in executions:
+        if not isinstance(execution, dict):
+            continue
+        instrument = execution.get("instrument_id")
+        side = execution.get("side")
+        amount = execution.get("amount_usd")
+        normalized_side = side.strip().upper() if isinstance(side, str) else ""
+        is_buy = True if normalized_side in ("BUY", "LONG") else (False if normalized_side in ("SELL", "SELLSHORT", "SHORT") else None)
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            amount = None
+        candidates = [
+            p for p in normalized_positions
+            if p["instrument_id"] == instrument and p["is_buy"] is is_buy
+            and amount is not None and p["amount_usd"] is not None
+            and abs(p["amount_usd"] - amount) <= 0.01
+        ] if is_buy is not None else []
+        if len(candidates) == 1:
+            status = "candidate_match_manual_confirmation"
+        elif len(candidates) > 1:
+            status = "ambiguous_multiple_positions"
+        else:
+            status = "no_current_position_match_manual_review"
+        items.append({
+            "idempotency_key": execution.get("idempotency_key"),
+            "ledger_status": execution.get("status"),
+            "symbol": execution.get("symbol"),
+            "instrument_id": instrument,
+            "side": side,
+            "amount_usd": amount,
+            "reconciliation_status": status,
+            "candidate_positions": candidates,
+            "automatic_confirmation": False,
+        })
+    return {
+        "status": "manual_review_required",
+        "automatic_confirmation": False,
+        "items": items,
+        "open_positions": normalized_positions,
+        "note": "A current-position match is only a candidate; absence does not prove rejection or closure. Verify broker order/history state before retrying.",
+    }
 
 
 def _parse_provider_bool(value):
@@ -644,7 +784,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        if path not in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market", "/strategies/simulate-momentum"):
+        if path not in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market", "/strategies/simulate-momentum", "/strategies/simulate-program", "/engine/demo-scan", "/engine/demo-evaluate", "/engine/demo-close"):
             return self._json(404, {"ok": False, "error": "not_found"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -660,6 +800,204 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "invalid_json"})
         if not isinstance(payload, dict):
             return self._json(400, {"ok": False, "error": "json_object_required"})
+        if path == "/engine/demo-scan":
+            if not self._strategy_admin_authorized():
+                return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
+            symbols = payload.get("symbols")
+            if not isinstance(symbols, list) or not 1 <= len(symbols) <= 5:
+                return self._json(400, {"ok": False, "error": "symbols_array_required", "max_symbols": 5})
+            allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_"
+            normalized_symbols = []
+            for item in symbols:
+                if not isinstance(item, str):
+                    return self._json(400, {"ok": False, "error": "invalid_symbol"})
+                symbol = item.strip().upper()
+                if not symbol or len(symbol) > 20 or any(char not in allowed for char in symbol):
+                    return self._json(400, {"ok": False, "error": "invalid_symbol"})
+                if symbol not in normalized_symbols:
+                    normalized_symbols.append(symbol)
+            if len(normalized_symbols) != len(symbols):
+                return self._json(400, {"ok": False, "error": "duplicate_symbols_not_allowed"})
+            try:
+                enabled = [item for item in list_strategies() if item.get("enabled")]
+                if len(enabled) != 1:
+                    return self._json(409, {"ok": False, "error": "exactly_one_enabled_strategy_required"})
+                strategy = enabled[0]
+                if strategy.get("strategyType") != "formula":
+                    return self._json(409, {
+                        "ok": False,
+                        "error": "python_program_requires_tick_runtime",
+                        "runtime_ready": False,
+                        "missing_inputs": ["closed_1m_candles", "continuous_ticks", "strategy_context"],
+                        "execution": "not_attempted",
+                    })
+                results = []
+                for symbol in normalized_symbols:
+                    status, market = fetch_market_context(symbol)
+                    if status != 200 or not market.get("ok"):
+                        results.append({
+                            "ok": False, "symbol": symbol, "error": "market_context_unavailable",
+                            "execution": "not_attempted",
+                        })
+                        continue
+                    results.append(evaluate_demo_scan_snapshot(strategy, symbol, market))
+                return self._json(200, {
+                    "ok": True, "mode": "scan_only", "strategy": strategy.get("name"),
+                    "results": results, "orders_submitted": 0,
+                    "note": "Read-only signal scan. No order side or amount is inferred and no trade is submitted.",
+                })
+            except StrategyStoreUnavailable as exc:
+                return self._json(503, {"ok": False, "error": "strategy_store_unavailable"})
+        if path == "/engine/demo-close":
+            if not self._strategy_admin_authorized():
+                return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
+            if os.environ.get("ETORO_TRADING_MODE", "disabled").strip().lower() != "demo":
+                return self._json(409, {"ok": False, "error": "demo_mode_required"})
+            position_id = payload.get("positionId")
+            instrument_id = payload.get("instrumentId")
+            for field, value in (("positionId", position_id), ("instrumentId", instrument_id)):
+                if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                    return self._json(400, {"ok": False, "error": field + "_must_be_positive_integer"})
+            try:
+                result = close_demo_position(position_id, instrument_id)
+                return self._json(200, {
+                    "ok": True, "mode": "demo", "close_submitted": True,
+                    "confirmation_required": True, "execution": result,
+                })
+            except EtoroExecutionError as exc:
+                return self._json(502, {"ok": False, "error": str(exc)})
+        if path == "/engine/demo-evaluate":
+            if not self._strategy_admin_authorized():
+                return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
+            if os.environ.get("ETORO_TRADING_MODE", "disabled").strip().lower() != "demo":
+                return self._json(409, {"ok": False, "error": "demo_mode_required"})
+            symbol = payload.get("symbol")
+            side = payload.get("side")
+            amount = payload.get("amountUsd")
+            allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_"
+            if not isinstance(symbol, str):
+                return self._json(400, {"ok": False, "error": "symbol_required"})
+            symbol = symbol.strip().upper()
+            if not symbol or len(symbol) > 20 or any(char not in allowed for char in symbol):
+                return self._json(400, {"ok": False, "error": "invalid_symbol"})
+            if not isinstance(side, str) or side.upper() not in ("LONG", "SHORT"):
+                return self._json(400, {"ok": False, "error": "side_must_be_LONG_or_SHORT"})
+            if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not math.isfinite(amount) or amount <= 0:
+                return self._json(400, {"ok": False, "error": "positive_amountUsd_required"})
+            try:
+                strategies = [item for item in list_strategies() if item.get("enabled")]
+                if len(strategies) != 1:
+                    return self._json(409, {"ok": False, "error": "exactly_one_enabled_strategy_required"})
+                strategy = strategies[0]
+                if strategy.get("strategyType") != "formula":
+                    return self._json(409, {"ok": False, "error": "python_program_engine_not_supported"})
+                # Treat configured strategy allocation and general capital as a hard
+                # per-order ceiling; caller-supplied amount alone must not set risk.
+                general_capital = get_general_capital()
+                allocation_percent = strategy.get("allocationPercent", 0)
+                try:
+                    allocation_cap = demo_allocation_cap(general_capital, allocation_percent)
+                except ValueError:
+                    return self._json(409, {
+                        "ok": False, "error": "valid_general_capital_and_strategy_allocation_required",
+                    })
+                if amount > allocation_cap:
+                    return self._json(409, {
+                        "ok": False, "error": "order_exceeds_strategy_allocation",
+                        "amount_usd": float(amount), "allocation_cap_usd": round(allocation_cap, 2),
+                        "allocation_percent": float(allocation_percent),
+                    })
+                status, market = fetch_market_context(symbol)
+                if status != 200 or not market.get("ok"):
+                    return self._json(502, {"ok": False, "error": "market_context_unavailable", "market": market})
+                if not market.get("quote_is_usable"):
+                    return self._json(409, {
+                        "ok": False, "error": "quote_not_usable",
+                        "market": {key: market.get(key) for key in (
+                            "symbol", "quote_time", "quote_age_seconds", "quote_is_fresh",
+                            "market_open", "delayed_quote", "quote_is_usable", "quote_quality_status",
+                        )},
+                    })
+                evaluation = evaluate_formula(strategy["formula"], market.get("market_values", {}))
+                if not evaluation.get("matched"):
+                    return self._json(200, {
+                        "ok": True, "mode": "demo", "executed": False, "reason": "signal_not_matched",
+                        "strategy": strategy.get("name"), "symbol": symbol, "evaluation": evaluation,
+                    })
+                # Server-generated daily key prevents clients bypassing deduplication with new request IDs.
+                quote_time = str(market.get("quote_time") or "")
+                if not quote_time:
+                    return self._json(409, {"ok": False, "error": "quote_timestamp_required_for_deduplication"})
+                signal_identity = "|".join([
+                    str(strategy.get("id")), symbol, side.upper(),
+                    str(int(market["instrument_id"])), quote_time[:10],
+                ])
+                idempotency_key = "auto-" + hashlib.sha256(signal_identity.encode("utf-8")).hexdigest()
+                reservation = reserve_demo_execution(
+                    idempotency_key, str(strategy.get("id")), symbol, side.upper(),
+                    int(market["instrument_id"]), float(amount),
+                )
+                if not reservation.get("reserved"):
+                    return self._json(409, {
+                        "ok": False, "error": "duplicate_or_uncertain_execution",
+                        "status": reservation.get("status"),
+                        "same_request": reservation.get("same_request", False),
+                        "hint": "Do not retry with a new key until Demo portfolio/order state has been reconciled.",
+                    })
+                try:
+                    result = open_market_order(market["instrument_id"], float(amount), side.upper() == "LONG")
+                except EtoroExecutionError:
+                    # A timeout can leave broker acceptance uncertain. Keep the key reserved.
+                    try:
+                        finish_demo_execution(idempotency_key, "unknown")
+                    except StrategyStoreUnavailable:
+                        pass
+                    raise
+                provider_data = result.get("data", {}) if isinstance(result, dict) else {}
+                provider_order_id = None
+                if isinstance(provider_data, dict):
+                    for field in ("orderId", "OrderId", "orderID", "OrderID"):
+                        candidate_id = provider_data.get(field)
+                        if isinstance(candidate_id, (str, int)) and not isinstance(candidate_id, bool):
+                            provider_order_id = candidate_id
+                            break
+                try:
+                    finish_demo_execution(idempotency_key, "submitted", provider_order_id)
+                except StrategyStoreUnavailable:
+                    return self._json(502, {
+                        "ok": False, "error": "execution_result_persistence_failed",
+                        "execution_may_have_been_submitted": True,
+                        "hint": "Reconcile Demo portfolio before any retry.",
+                    })
+                return self._json(200, {
+                    "ok": True, "mode": "demo", "executed": True,
+                    "provider_order_id": provider_order_id,
+                    "broker_confirmation": "not_verified",
+                    "strategy": strategy.get("name"), "symbol": symbol, "side": side.upper(),
+                    "idempotencyKey": idempotency_key, "evaluation": evaluation, "execution": result,
+                    "confirmation_required": True,
+                })
+            except StrategyStoreUnavailable as exc:
+                return self._json(503, {"ok": False, "error": str(exc)})
+            except StrategyFormulaError as exc:
+                return self._json(422, {"ok": False, "error": "strategy_data_unavailable", "detail": str(exc)})
+            except EtoroExecutionError as exc:
+                return self._json(502, {"ok": False, "error": str(exc)})
+            except (TypeError, ValueError, OverflowError):
+                return self._json(400, {"ok": False, "error": "invalid_engine_request"})
+        if path == "/strategies/simulate-program":
+            if not self._strategy_admin_authorized():
+                return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
+            try:
+                result = evaluate_strategy_replay(payload)
+                return self._json(200, result)
+            except (TypeError, ValueError, OverflowError) as exc:
+                return self._json(400, {
+                    "ok": False,
+                    "error": "invalid_strategy_replay",
+                    "detail": str(exc)[:160],
+                    "execution": "not_attempted",
+                })
         if path == "/strategies/simulate-momentum":
             if not self._strategy_admin_authorized():
                 return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
@@ -743,15 +1081,60 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
-        if path in ("/strategies", "/strategies/capital"):
+        if path in ("/strategies", "/strategies/capital", "/engine/demo-reconcile", "/engine/demo-scan-history", "/engine/demo-order-status"):
             if not self._strategy_admin_authorized():
                 return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
             try:
                 if path == "/strategies/capital":
                     return self._json(200, {"ok": True, "capital": get_general_capital()})
-                return self._json(200, {"ok": True, "strategies": list_strategies()})
+                if path == "/strategies":
+                    return self._json(200, {"ok": True, "strategies": list_strategies()})
+                if path == "/engine/demo-scan-history":
+                    try:
+                        limit = int(parse_qs(urlsplit(self.path).query).get("limit", ["50"])[0])
+                    except (TypeError, ValueError):
+                        return self._json(400, {"ok": False, "error": "invalid_scan_history_limit"})
+                    try:
+                        cycles = list_demo_scan_cycles(limit)
+                    except ValueError:
+                        return self._json(400, {"ok": False, "error": "invalid_scan_history_limit", "min": 1, "max": 200})
+                    return self._json(200, {"ok": True, "mode": "scan_only", "cycles": cycles})
+                if os.environ.get("ETORO_TRADING_MODE", "disabled").strip().lower() != "demo":
+                    return self._json(409, {"ok": False, "error": "demo_mode_required"})
+                if path == "/engine/demo-order-status":
+                    if os.environ.get("ETORO_TRADING_MODE", "disabled").strip().lower() != "demo":
+                        return self._json(409, {"ok": False, "error": "demo_mode_required"})
+                    query = parse_qs(urlsplit(self.path).query)
+                    try:
+                        order_id = int(query.get("order_id", [""])[0])
+                    except (TypeError, ValueError):
+                        return self._json(400, {"ok": False, "error": "positive_order_id_required"})
+                    if order_id <= 0:
+                        return self._json(400, {"ok": False, "error": "positive_order_id_required"})
+                    try:
+                        lookup = get_demo_order_information(order_id)
+                    except EtoroExecutionError as exc:
+                        return self._json(502, {"ok": False, "error": str(exc)})
+                    data = lookup.get("data", {})
+                    summary = summarize_demo_order_status(order_id, data)
+                    return self._json(200, {"ok": True, "mode": "demo", "order_id": order_id,
+                        **summary, "read_only": True})
+                portfolio = get_demo_portfolio()
+                executions = list_demo_executions(100)
+                reconciliation = reconcile_demo_snapshot(portfolio, executions)
+                return self._json(200, {
+                    "ok": True, "mode": "demo",
+                    "reconciliation_status": reconciliation["status"],
+                    "confirmation_required": True,
+                    "portfolio_snapshot": portfolio,
+                    "recent_executions": executions,
+                    "reconciliation": reconciliation,
+                    "hint": "Read-only candidate matching only. Never retry pending/unknown/submitted orders until broker order/history state is verified.",
+                })
             except StrategyStoreUnavailable as exc:
                 return self._json(503, {"ok": False, "error": str(exc)})
+            except EtoroExecutionError as exc:
+                return self._json(502, {"ok": False, "error": str(exc)})
         self._dispatch()
 
     def do_PUT(self):
