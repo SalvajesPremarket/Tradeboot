@@ -88,3 +88,13 @@ La API escucha en `http://localhost:10000` por defecto; puede cambiarse con `POR
 7. Definir persistencia, monitoreo, límites de riesgo y requisitos de operación antes de diseñar cualquier ejecución de trading.
 
 **Seguridad:** Tradeboot permanece en modo de solo lectura. No habilitar trading automático a partir de las pruebas de datos de mercado.
+
+## Acceso por cuenta y editor de estrategias
+
+- La autenticación usa cuentas almacenadas en PostgreSQL y contraseñas protegidas con PBKDF2-SHA256; las sesiones usan cookies `HttpOnly; Secure; SameSite=Lax` con caducidad de siete días.
+- El administrador inicial se crea al iniciar sesión cuando están configuradas las variables `TRADEBOOT_ADMIN_USERNAME` y `TRADEBOOT_ADMIN_PASSWORD`. Si no se definen, el sistema usa el nombre `admin` y el valor existente de `TRADEBOOT_STRATEGY_ADMIN_TOKEN` como contraseña de arranque, para facilitar la transición desde el token privado existente. La contraseña de arranque debe tener al menos 12 caracteres.
+- Después de iniciar sesión, el administrador puede crear usuarios y habilitar o revocar el acceso al editor de estrategias. Los usuarios ordinarios no obtienen permisos de administración.
+- El token privado nunca se entrega al navegador como sesión; las llamadas de sincronización usan la cookie de sesión.
+- Cada cuenta puede cambiar su contraseña. La contraseña inicial de cada usuario debe tener al menos 12 caracteres.
+- Endpoints: `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/password`, `GET /auth/users`, `POST /auth/users` y `PUT /auth/users/editor`.
+- Configurar `DATABASE_URL` en Render sigue siendo necesario para las cuentas y la sincronización compartida.
