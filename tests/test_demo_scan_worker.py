@@ -81,6 +81,16 @@ class DemoScanWorkerTests(unittest.TestCase):
     def test_environment_validation_accepts_legacy_user_key(self):
         demo_scan_worker.validate_environment()
 
+    @patch("demo_scan_worker.fetch_market_context", side_effect=RuntimeError("secret-token-should-not-leak"))
+    @patch("demo_scan_worker.list_strategies")
+    def test_provider_exception_details_are_not_returned(self, strategies, market):
+        strategies.return_value = [self.strategy]
+        result = demo_scan_worker.scan_once(["ABC"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["results"][0]["error"], "scan_item_failed")
+        self.assertNotIn("detail", result["results"][0])
+        self.assertNotIn("secret-token-should-not-leak", str(result))
+
 
 if __name__ == "__main__":
     unittest.main()
