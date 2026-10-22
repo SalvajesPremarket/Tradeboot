@@ -49,9 +49,11 @@ def _init_tables(conn):
             entry_at TIMESTAMPTZ NOT NULL,
             exit_at TIMESTAMPTZ,
             exit_reason TEXT,
-            last_quote_at TIMESTAMPTZ
+            last_quote_at TIMESTAMPTZ,
+            last_price DOUBLE PRECISION
         )
     """)
+    conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS last_price DOUBLE PRECISION")
     conn.execute("CREATE INDEX IF NOT EXISTS tradeboot_paper_trades_status_idx ON tradeboot_paper_trades(status, strategy_id, symbol)")
 
 
@@ -73,7 +75,7 @@ def get_paper_status():
             rows = conn.execute("SELECT state_key,state_value,updated_at FROM tradeboot_paper_state").fetchall()
             trades = conn.execute("""
                 SELECT id,strategy_id,strategy_name,symbol,status,entry_price,exit_price,quantity,
-                       allocated_usd,stop_price,take_price,pnl_usd,entry_at,exit_at,exit_reason
+                       allocated_usd,stop_price,take_price,pnl_usd,entry_at,exit_at,exit_reason,last_price
                 FROM tradeboot_paper_trades ORDER BY id DESC LIMIT 50
             """).fetchall()
             counts = conn.execute("""
@@ -82,12 +84,14 @@ def get_paper_status():
                 FROM tradeboot_paper_trades
             """).fetchone()
         state = {k: {"value": json.loads(v), "updated_at": t.isoformat()} for k,v,t in rows}
-        return {"ok": True, "mode": "paper_only", "worker": state.get("worker", {}).get("value", {"status":"starting"}),
-                "open_trades": int(counts[0]), "closed_trades": int(counts[1]), "realized_pnl_usd": float(counts[2]),
-                "trades": [{"id":r[0],"strategy_id":r[1],"strategy_name":r[2],"symbol":r[3],"status":r[4],
+        trade_items = [{"id":r[0],"strategy_id":r[1],"strategy_name":r[2],"symbol":r[3],"status":r[4],
                   "entry_price":r[5],"exit_price":r[6],"quantity":r[7],"allocated_usd":r[8],"stop_price":r[9],
                   "take_price":r[10],"pnl_usd":r[11],"entry_at":r[12].isoformat(),"exit_at":r[13].isoformat() if r[13] else None,
-                  "exit_reason":r[14]} for r in trades]}
+                  "exit_reason":r[14],"last_price":r[15],
+                  "unrealized_pnl_usd":((float(r[15])-float(r[5]))*float(r[7]) if r[4]=="OPEN" and r[15] is not None else 0.0)} for r in trades]
+        return {"ok": True, "mode": "paper_only", "worker": state.get("worker", {}).get("value", {"status":"starting"}),
+                "open_trades": int(counts[0]), "closed_trades": int(counts[1]), "realized_pnl_usd": float(counts[2]),
+                "unrealized_pnl_usd": sum(t["unrealized_pnl_usd"] for t in trade_items), "trades": trade_items}
     except Exception:
         return {"ok": False, "mode": "paper_only", "worker": {"status":"unavailable"}, "error":"paper_storage_unavailable"}
 
@@ -100,6 +104,7 @@ def run_cycle():
     active_programs = [s for s in enabled_strategies if s.get("strategyType") == "python_program"]
     capital = get_general_capital()
     evaluated = 0
+    matches = []
     # The reviewed engines are integrated, but this worker's current eToro adapter
     # supplies one quote snapshot, not the historical OHLCV and intraminute ticks
     # these four programs require. Never fabricate bars or signals from snapshots.
@@ -141,6 +146,9 @@ def run_cycle():
                 skipped.append({"symbol":symbol,"strategy_id":strategy["id"],"reason":"formula_or_data_error","detail":type(exc).__name__})
                 continue
             evaluated += 1
+            matches.append({"strategy_id":strategy["id"],"strategy_name":strategy["name"],"symbol":symbol,
+                            "matched":matched,"price":price,"at":started.isoformat()})
+            matches = matches[-50:]
             allocation = capital * float(strategy.get("allocationPercent",10))/100
             with _connect() as conn:
                 _init_tables(conn)
@@ -152,6 +160,8 @@ def run_cycle():
                     if open_row:
                         tid, entry, qty, stop, take = open_row
                         reason = "stop_loss" if price <= stop else ("take_profit" if price >= take else ("formula_false" if not matched else None))
+                        if not reason:
+                            conn.execute("UPDATE tradeboot_paper_trades SET last_price=%s,last_quote_at=%s WHERE id=%s", (price,quote_at,tid))
                         if reason:
                             pnl = (price-entry)*qty
                             conn.execute("""UPDATE tradeboot_paper_trades SET status='CLOSED',exit_price=%s,pnl_usd=%s,
@@ -169,15 +179,15 @@ def run_cycle():
                         if remaining_allocation > 0:
                             qty = remaining_allocation / price
                             conn.execute("""INSERT INTO tradeboot_paper_trades
-                              (strategy_id,strategy_name,symbol,status,entry_price,quantity,allocated_usd,stop_price,take_price,entry_at,last_quote_at)
-                              VALUES (%s,%s,%s,'OPEN',%s,%s,%s,%s,%s,%s,%s)""",
+                              (strategy_id,strategy_name,symbol,status,entry_price,quantity,allocated_usd,stop_price,take_price,entry_at,last_quote_at,last_price)
+                              VALUES (%s,%s,%s,'OPEN',%s,%s,%s,%s,%s,%s,%s,%s)""",
                               (strategy["id"],strategy["name"],symbol,price,qty,remaining_allocation,price*(1-_STOP_PCT/100),
-                               price*(1+_TAKE_PCT/100),started,quote_at))
+                               price*(1+_TAKE_PCT/100),started,quote_at,price))
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
                       "symbols":symbols,"active_formula_strategies":len(active),
                       "active_program_strategies":len(active_programs),
                       "program_engine_status":"waiting_for_historical_ohlcv_and_intraminute_ticks" if active_programs else "idle",
-                      "evaluations":evaluated,"skipped":skipped[:30],
+                      "evaluations":evaluated,"matches":matches,"skipped":skipped[:30],
                       "trading_mode":"paper_only","real_orders_enabled":False})
 
 
