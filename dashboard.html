@@ -107,7 +107,8 @@ let generalCapital=Number(localStorage.getItem('tradeboot.generalCapital.v1')||0
 let accountUser=null;
 const strategyEvaluationResults={};
 const strategyName=$('strategy-name'), strategyFormula=$('strategy-formula');
-const strategyType=$('strategy-type'), strategyAllocation=$('strategy-allocation');
+const strategyType=$('strategy-type'), usagePercentInput=$('strategy-usage-percent');
+let usagePercent=Number(localStorage.getItem('tradeboot.usagePercent.v1')||10);
 let validatedProgramText='';
 strategyType.addEventListener('change',()=>{
  const program=strategyType.value==='python_program';
@@ -118,10 +119,14 @@ strategyType.addEventListener('change',()=>{
 });
 strategyType.dispatchEvent(new Event('change'));
 function moneyUSD(value){return Number(value||0).toLocaleString('en-US',{style:'currency',currency:'USD'});}
-function updateBudgetPreview(){const pct=Number(strategyAllocation.value);const valid=Number.isFinite(pct)&&pct>=0&&pct<=100;$('strategy-budget-preview').textContent=moneyUSD(valid?generalCapital*pct/100:0)+' asignados · cálculo informativo';}
+function updateBudgetPreview(){const pct=Number(usagePercentInput.value);const valid=Number.isFinite(pct)&&pct>=0&&pct<=100;$('strategy-budget-preview').textContent=moneyUSD(valid?generalCapital*pct/100:0)+' de uso calculado ('+(valid?pct:0)+'%) · solo simulación';}
+function setUsagePercent(value){usagePercent=Number(value);if(!Number.isFinite(usagePercent)||usagePercent<0||usagePercent>100)usagePercent=10;usagePercentInput.value=String(usagePercent);localStorage.setItem('tradeboot.usagePercent.v1',String(usagePercent));updateBudgetPreview();}
+async function loadUsagePercent(){try{const r=await fetch('/strategies/usage-percent',{credentials:'same-origin',cache:'no-store'}),d=await r.json();if(r.ok&&d.ok)setUsagePercent(d.percent);}catch(_){}}
+async function saveUsagePercent(){const status=$('capital-status'),n=Number(usagePercentInput.value);if(!Number.isFinite(n)||n<0||n>100){status.textContent='El porcentaje de uso debe estar entre 0 y 100.';return;}setUsagePercent(n);if(cloudMode){try{const r=await fetch('/strategies/usage-percent',{method:'PUT',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({percent:usagePercent}),cache:'no-store'}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.detail||d.error||'No se pudo guardar el porcentaje');status.textContent='Porcentaje de uso guardado y sincronizado entre dispositivos.';}catch(e){status.textContent='Porcentaje guardado en este navegador; error al sincronizar: '+e.message;}}else status.textContent='Porcentaje guardado en este navegador. Inicia sesión para sincronizarlo entre dispositivos.';}
+$('usage-save').addEventListener('click',saveUsagePercent);
+usagePercentInput.addEventListener('input',()=>{const n=Number(usagePercentInput.value);if(Number.isFinite(n)&&n>=0&&n<=100){usagePercent=n;updateBudgetPreview();}});
 function loadGeneralCapital(){$('strategy-capital').value=String(generalCapital);updateBudgetPreview();}
 $('strategy-capital').addEventListener('input',()=>{const n=Number($('strategy-capital').value);if(Number.isFinite(n)&&n>=0){generalCapital=n;updateBudgetPreview();}});
-strategyAllocation.addEventListener('input',updateBudgetPreview);
 async function saveGeneralCapital(){const input=$('strategy-capital'),status=$('capital-status'),n=Number(input.value);if(!Number.isFinite(n)||n<0){status.textContent='Introduce un monto igual o mayor que cero.';return;}generalCapital=n;localStorage.setItem('tradeboot.generalCapital.v1',String(n));updateBudgetPreview();if(cloudMode){try{const r=await fetch('/strategies/capital',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({capital:generalCapital}),cache:'no-store'});const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.detail||d.error||'No se pudo guardar en PostgreSQL');status.textContent='Monto general guardado en PostgreSQL.';}catch(e){status.textContent='Guardado local; error al sincronizar: '+e.message;}}else status.textContent='Guardado en este navegador. Conecta el almacenamiento compartido para sincronizar.';}
 $('capital-save').addEventListener('click',saveGeneralCapital);
 loadGeneralCapital();
@@ -155,7 +160,7 @@ async function connectStrategyStorage(){
  const local=strategies;cloudMode=true;
  if(!data.strategies.length&&local.length&&accountUser.role==='admin'&&confirm('El servidor está vacío. ¿Quieres copiar tus '+local.length+' estrategias locales al almacenamiento compartido?')){strategies=local;await persistStrategies();}
  else{strategies=data.strategies;localStorage.setItem(strategyStoreKey,JSON.stringify(strategies));renderStrategies();status.textContent='Conectado · estrategias sincronizadas con PostgreSQL.';
- const cr=await fetch('/strategies/capital',{credentials:'same-origin',cache:'no-store'}),cd=await cr.json();if(cr.ok&&cd.ok){generalCapital=Number(cd.capital)||0;$('strategy-capital').value=String(generalCapital);updateBudgetPreview();$('capital-status').textContent='Monto general cargado de PostgreSQL.';}}
+ const cr=await fetch('/strategies/capital',{credentials:'same-origin',cache:'no-store'}),cd=await cr.json();if(cr.ok&&cd.ok){generalCapital=Number(cd.capital)||0;$('strategy-capital').value=String(generalCapital);updateBudgetPreview();$('capital-status').textContent='Monto general cargado de PostgreSQL.';}await loadUsagePercent();}
  }catch(e){cloudMode=false;status.textContent='No conectado: '+e.message}
 }
 async function refreshAccount(){
@@ -230,15 +235,14 @@ async function evaluateActiveStrategies(resultsBySymbol){
  }));
  renderStrategies();
 }
-function resetStrategyForm(){editingStrategyId=null;$('strategy-form').reset();validatedProgramText='';strategyType.dispatchEvent(new Event('change'));strategyAllocation.value='10';updateBudgetPreview();$('strategy-save').textContent='＋ Guardar estrategia';$('strategy-cancel').hidden=true;$('strategy-validation-status').textContent=''}
+function resetStrategyForm(){editingStrategyId=null;$('strategy-form').reset();validatedProgramText='';strategyType.dispatchEvent(new Event('change'));updateBudgetPreview();$('strategy-save').textContent='＋ Guardar estrategia';$('strategy-cancel').hidden=true;$('strategy-validation-status').textContent=''}
 $('strategy-form').addEventListener('submit',event=>{
  event.preventDefault();
- const name=strategyName.value.trim(),formula=strategyFormula.value,strategyTypeValue=strategyType.value,allocationPercent=Number(strategyAllocation.value);
+ const name=strategyName.value.trim(),formula=strategyFormula.value,strategyTypeValue=strategyType.value;
  if(!name||!formula.trim())return;
  if(strategyTypeValue==='python_program'&&validatedProgramText!==formula){$('strategy-validation-status').textContent='Valida primero la sintaxis Python y luego guarda el programa.';return;}
- if(!Number.isFinite(allocationPercent)||allocationPercent<0||allocationPercent>100){$('strategy-validation-status').textContent='El porcentaje debe estar entre 0 y 100.';return;}
- if(editingStrategyId){const item=strategies.find(s=>s.id===editingStrategyId);if(item){item.name=name;item.formula=formula;item.strategyType=strategyTypeValue;delete item.allocationPercent}}
- else{strategies.push({id:(typeof crypto!=='undefined'&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2),name,formula,strategyType:strategyTypeValue,enabled:false,allocationPercent,createdAt:new Date().toISOString()})}
+  if(editingStrategyId){const item=strategies.find(s=>s.id===editingStrategyId);if(item){item.name=name;item.formula=formula;item.strategyType=strategyTypeValue;delete item.allocationPercent}}
+ else{strategies.push({id:(typeof crypto!=='undefined'&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2),name,formula,strategyType:strategyTypeValue,enabled:false,createdAt:new Date().toISOString()})}
  try{persistStrategies();renderStrategies();resetStrategyForm()}catch(_){alert('No se pudo guardar en el almacenamiento local de este navegador.')}
 });
 $('strategy-validate').addEventListener('click',async()=>{
