@@ -234,6 +234,9 @@ def run_cycle():
             daily_rows = [clean_candle(row, "daily") for row in daily_payload.get("candles", [])]
             minute_rows = sorted([row for row in minute_rows if row], key=lambda x: x["_stamp"])
             daily_rows = sorted([row for row in daily_rows if row], key=lambda x: x["_stamp"])
+            # Pullback D/W context must use completed sessions, not today's partial daily candle.
+            current_eastern_date = started.astimezone(eastern).date()
+            daily_rows = [row for row in daily_rows if row["_stamp"].astimezone(eastern).date() < current_eastern_date]
             if not minute_rows:
                 skipped.append({"symbol": symbol, "reason": "no_completed_minute_candles"})
                 continue
