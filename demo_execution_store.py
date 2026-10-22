@@ -1,4 +1,5 @@
-"""PostgreSQL idempotency ledger for eToro Demo execution requests."""
+"""PostgreSQL ledger and bounded scan history for eToro Demo operations."""
+import json
 from datetime import datetime, timezone
 from strategy_store import _connect, StrategyStoreUnavailable
 
@@ -74,7 +75,6 @@ def list_demo_executions(limit=100):
 
 def record_demo_scan_cycle(strategy_name, started_at, results):
     """Persist a bounded, read-only scanner cycle for authenticated review."""
-    import json
     if not isinstance(strategy_name, str) or len(strategy_name) > 200:
         raise ValueError("scan_strategy_name_invalid")
     if not isinstance(started_at, str) or not started_at.strip() or len(started_at) > 80:
