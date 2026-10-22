@@ -1053,7 +1053,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
-        if path in ("/strategies", "/strategies/capital", "/engine/demo-reconcile", "/engine/demo-scan-history"):
+        if path in ("/strategies", "/strategies/capital", "/engine/demo-reconcile", "/engine/demo-scan-history", "/engine/demo-order-status"):
             if not self._strategy_admin_authorized():
                 return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
             try:
