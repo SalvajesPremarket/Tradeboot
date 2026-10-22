@@ -19,6 +19,16 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 - Rama: `main`; el despliegue automático está activado en modo `On Commit`.
 - Los cambios enviados a `main` inician un despliegue automático en Render.
 
+## Schwab (preparación de integración de solo lectura)
+
+- `SCHWAB_CLIENT_ID` / `SCHWAB_CLIENT_SECRET` (también acepta `SCHWAB_APP_KEY` / `SCHWAB_APP_SECRET`), `SCHWAB_REDIRECT_URI` y `SCHWAB_TOKEN_ENCRYPTION_KEY` deben configurarse en Render.
+- `GET /schwab/authorize` inicia OAuth y valida la configuración antes de redirigir al portal de Schwab.
+- `GET /schwab/callback` valida `state`, intercambia el código y guarda tokens cifrados en PostgreSQL.
+- `GET /schwab/status` informa el estado sin mostrar secretos.
+- `GET /schwab/quotes?symbols=AAPL,MSFT` consulta cotizaciones de Market Data API; no envía órdenes.
+- La clave de cifrado `SCHWAB_TOKEN_ENCRYPTION_KEY` debe ser una clave Fernet válida. El token cifrado persistido permite guardar las rotaciones del refresh token sin depender de editar variables en cada renovación.
+- La aplicación debe estar aprobada por Schwab y tener permisos de Market Data antes de que OAuth y las cotizaciones puedan funcionar.
+
 ## Endpoints
 
 - `GET /health` — comprobación de salud.
