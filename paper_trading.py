@@ -156,15 +156,19 @@ def run_cycle():
 
 
 def _loop():
+    print("Tradeboot paper-trading loop entered", flush=True)
     while True:
         try:
             run_cycle()
+            print("Tradeboot paper-trading cycle completed", flush=True)
         except Exception as exc:
+            print(f"Tradeboot paper-trading cycle failed: {type(exc).__name__}", flush=True)
+            traceback.print_exc()
             try:
                 _state("worker", {"status":"error","last_cycle_at":datetime.now(timezone.utc).isoformat(),
                                   "error":type(exc).__name__,"trading_mode":"paper_only","real_orders_enabled":False})
-            except Exception:
-                pass
+            except Exception as state_exc:
+                print(f"Tradeboot paper-trading error status could not be persisted: {type(state_exc).__name__}", flush=True)
         time.sleep(_INTERVAL)
 
 
