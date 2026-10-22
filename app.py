@@ -108,7 +108,8 @@ def reconcile_demo_snapshot(portfolio_response, executions):
         instrument = execution.get("instrument_id")
         side = execution.get("side")
         amount = execution.get("amount_usd")
-        is_buy = True if side == "buy" else (False if side in ("sell", "sellShort", "short") else None)
+        normalized_side = side.strip().upper() if isinstance(side, str) else ""
+        is_buy = True if normalized_side in ("BUY", "LONG") else (False if normalized_side in ("SELL", "SELLSHORT", "SHORT") else None)
         try:
             amount = float(amount)
         except (TypeError, ValueError):
