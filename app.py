@@ -22,7 +22,7 @@ from strategy_program import validate_strategy_source
 from strategy_simulation import simulate_momentum
 from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital
 from demo_execution_store import reserve_demo_execution, finish_demo_execution, list_demo_executions, list_demo_scan_cycles
-from etoro_execution import EtoroExecutionError, open_market_order, close_demo_position, get_demo_portfolio
+from etoro_execution import EtoroExecutionError, open_market_order, close_demo_position, get_demo_portfolio, get_demo_order_information
 
 
 module = Tradeboot()
