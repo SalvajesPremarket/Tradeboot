@@ -73,7 +73,11 @@ def replace_strategies(items):
         if not isinstance(enabled, bool):
             raise ValueError("Strategy enabled flag must be boolean.")
         if strategy_type == "python_program" and enabled:
-            raise ValueError("Complete Python programs cannot be activated before their dedicated engine is integrated.")
+            # Only the four checked-in, reviewed implementations can be activated.
+            # Never execute arbitrary Python source submitted by a browser.
+            from strategy_program_engine import is_supported_program
+            if not is_supported_program(name, formula):
+                raise ValueError("Este programa Python no coincide con el motor revisado; restaura el código original antes de activarlo.")
         if isinstance(allocation_percent, bool) or not isinstance(allocation_percent, (int, float)) or not 0 <= allocation_percent <= 100:
             raise ValueError("Strategy allocation percentage must be between 0 and 100.")
         try:
@@ -83,10 +87,8 @@ def replace_strategies(items):
         except (ValueError, OverflowError):
             created_at = now
         normalized.append((sid, name.strip(), formula, strategy_type, enabled, float(allocation_percent), created_at, now))
-    enabled_formula_rows = [row for row in normalized if row[4] and row[3] == "formula"]
-    if any(row[4] and row[3] != "formula" for row in normalized):
-        raise ValueError("Solo se pueden activar estrategias de tipo fórmula; el motor Python dedicado aún no está integrado.")
-    if sum(row[5] for row in enabled_formula_rows) > 100.000001:
+    enabled_rows = [row for row in normalized if row[4]]
+    if sum(row[5] for row in enabled_rows) > 100.000001:
         raise ValueError("La asignación combinada de las estrategias activas no puede superar el 100% del capital general.")
     if len(normalized) > 1000:
         raise ValueError("A maximum of 1000 strategies is supported.")
