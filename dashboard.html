@@ -103,8 +103,8 @@ async function saveGeneralCapital(){const input=$('strategy-capital'),status=$('
 $('capital-save').addEventListener('click',saveGeneralCapital);
 loadGeneralCapital();
 function loadStrategies(){try{const parsed=JSON.parse(localStorage.getItem(strategyStoreKey)||'[]');strategies=Array.isArray(parsed)?parsed.filter(s=>s&&typeof s.id==='string'&&typeof s.name==='string'&&typeof s.formula==='string'):[]}catch(_){strategies=[]}}
-async function persistStrategies(){
- if(!cloudMode){localStorage.setItem(strategyStoreKey,JSON.stringify(strategies));return}
+async async function persistStrategies(){
+ if(!cloudMode||!cloudToken){$('strategy-cloud-status').textContent='Conecta el almacenamiento compartido antes de cambiar el estado de una estrategia.';return false}
  const status=$('strategy-cloud-status');
  try{
   const response=await fetch('/strategies',{method:'PUT',headers:{'Content-Type':'application/json','X-Strategy-Admin-Token':cloudToken},body:JSON.stringify({strategies}),cache:'no-store'});
@@ -114,7 +114,16 @@ async function persistStrategies(){
   localStorage.setItem(strategyStoreKey,JSON.stringify(strategies));
   status.textContent='Conectado · estrategias guardadas en almacenamiento compartido.';
   renderStrategies();
- }catch(error){status.textContent='Error al sincronizar: '+error.message;cloudMode=false;localStorage.setItem(strategyStoreKey,JSON.stringify(strategies))}
+  return true;
+ }catch(error){
+  status.textContent='Error al sincronizar: '+error.message;
+  try{
+   const check=await fetch('/strategies',{headers:{'X-Strategy-Admin-Token':cloudToken},cache:'no-store'});
+   const saved=await check.json();
+   if(check.ok&&saved.ok){strategies=saved.strategies;localStorage.setItem(strategyStoreKey,JSON.stringify(strategies));renderStrategies();}
+  }catch(_){}
+  return false;
+ }
 }
 async function connectStrategyStorage(){
  const token=$('strategy-token').value.trim(), status=$('strategy-cloud-status');
@@ -141,7 +150,13 @@ function renderStrategies(){
  $('strategy-count').textContent=strategies.length+' estrategia'+(strategies.length===1?'':'s');
  const list=$('strategy-list');
  if(!strategies.length){list.innerHTML='<div class="empty-strategies">Todavía no has creado estrategias. Usa el formulario para añadir la primera.</div>';return}
- list.innerHTML=strategies.map(s=>{const program=(s.strategyType||'formula')==='python_program',momentum=program&&s.name.toLowerCase().includes('momentum tramos');return '<article class="strategy-item '+(s.enabled?'enabled':'')+'"><div class="strategy-title"><div><h3>'+escapeHtml(s.name)+'</h3><div class="company">'+(momentum?'MOTOR CONECTADO · SOLO SIMULACIÓN':program?'PYTHON COMPLETO · MOTOR NO DISPONIBLE':s.enabled?'ACTIVADA · CONFIGURACIÓN':'DESACTIVADA')+'</div></div><span class="tag '+(s.enabled?'good':'warn')+'">'+(program?'CÓDIGO':s.enabled?'ON':'OFF')+'</span></div><div class="strategy-formula">'+escapeHtml(s.formula)+'</div><div class="status-note">'+escapeHtml(strategyEvaluationResults[s.id]||(momentum?'Motor Momentum Tramos disponible para una prueba con datos sintéticos.':program?'Código guardado; no se ejecuta automáticamente.':s.enabled?'Esperando evaluación de cotizaciones utilizables.':'Estrategia desactivada; no se evalúa.'))+'</div><div class="strategy-actions">'+(momentum?'<button type="button" data-action="simulate" data-id="'+escapeHtml(s.id)+'" class="secondary">Probar motor (simulación)</button>':'')+'<button type="button" data-action="toggle" data-id="'+escapeHtml(s.id)+'" class="secondary" '+(program?'disabled title="Solo el motor integrado Momentum Tramos admite simulación"':'')+'>'+(s.enabled?'Desactivar':'Activar')+'</button><button type="button" data-action="edit" data-id="'+escapeHtml(s.id)+'" class="secondary">Editar</button><button type="button" data-action="delete" data-id="'+escapeHtml(s.id)+'" class="danger">Borrar</button></div></article>'}).join('');
+ const reviewedNames=['JeanLong','JeanShort','PULLBACK LONG EMA50 o 200 D W','PULLBACK SHORT EMA50 o 200 D W'];
+ list.innerHTML=strategies.map(s=>{
+  const program=(s.strategyType||'formula')==='python_program',reviewed=program&&reviewedNames.includes(s.name);
+  const title=reviewed?'MOTOR REVISADO · SOLO SIMULACIÓN':program?'PYTHON · MOTOR NO DISPONIBLE':s.enabled?'ACTIVADA · CONFIGURACIÓN':'DESACTIVADA';
+  const note=strategyEvaluationResults[s.id]||(reviewed?'Motor integrado; prueba primero con datos sintéticos.':program?'Programa no incluido en la lista revisada; no se ejecutará.':s.enabled?'Esperando evaluación de cotizaciones utilizables.':'Estrategia desactivada; no se evalúa.');
+  return '<article class="strategy-item '+(s.enabled?'enabled':'')+'"><div class="strategy-title"><div><h3>'+escapeHtml(s.name)+'</h3><div class="company">'+title+'</div></div><span class="tag '+(s.enabled?'good':'warn')+'">'+(program?'PYTHON':s.enabled?'ON':'OFF')+'</span></div><div class="strategy-formula">'+escapeHtml(s.formula)+'</div><div class="status-note">'+escapeHtml(note)+'</div><div class="strategy-actions">'+(reviewed?'<button type="button" data-action="simulate" data-id="'+escapeHtml(s.id)+'" class="secondary">Probar motor (simulación)</button>':'')+'<button type="button" data-action="toggle" data-id="'+escapeHtml(s.id)+'" class="secondary" '+(program&&!reviewed?'disabled title="El motor solo permite programas revisados"':'')+'>'+(s.enabled?'Desactivar':'Activar')+'</button><button type="button" data-action="edit" data-id="'+escapeHtml(s.id)+'" class="secondary">Editar</button><button type="button" data-action="delete" data-id="'+escapeHtml(s.id)+'" class="danger">Borrar</button></div></article>';
+ }).join('');
 }
 async function evaluateActiveStrategies(resultsBySymbol){
  const active=strategies.filter(s=>s.enabled&&(s.strategyType||'formula')==='formula');
@@ -214,26 +229,28 @@ $('strategy-list').addEventListener('click',async event=>{
   if(!cloudMode||!cloudToken){strategyEvaluationResults[item.id]='Conecta primero el almacenamiento compartido para autorizar la prueba del motor.';renderStrategies();return;}
   strategyEvaluationResults[item.id]='Ejecutando prueba sintética del motor…';renderStrategies();
   const now=new Date(),minute=new Date(now);minute.setSeconds(0,0);
-  const historical=Array.from({length:200},()=>({open:2,high:2,low:2,close:2}));
-  for(let i=1;i<=20;i++){const p=2+i*.01;historical.push({open:p,high:p,low:p,close:p});}
+  const historical=Array.from({length:220},(_,i)=>{const p=8+i*.002;return {open:p,high:p+.03,low:p-.03,close:p};});
   const at=(seconds)=>new Date(minute.getTime()+seconds*1000).toISOString();
-  const payload={symbol:'SIM',side:'LONG',config:{max_prior_streak:100},candles:historical,ticks:[{price:2.2,timestamp:at(0)},{price:2.197,timestamp:at(5)},{price:2.2,timestamp:at(10)}],context:{prev_close:2,avg_premarket_volume_30d:100000,volume_today:600000,float_shares:10000000,news:[{published_at:new Date(minute.getTime()-600000).toISOString(),headline:'Company reports quarterly earnings'}]}};
+  const daily=Array.from({length:400},(_,i)=>{const d=new Date(minute.getTime()-(399-i)*86400000);const p=8+i*.002;return {timestamp:d.toISOString(),open:p,high:p+.08,low:p-.08,close:p,volume:600000};});
+  const payload={strategyName:item.name,formula:item.formula,symbol:'SIM',capital:10000,candles:historical,daily_candles:daily,ticks:[{price:8.45,timestamp:at(0),day_volume:600000},{price:8.447,timestamp:at(5),day_volume:600000},{price:8.45,timestamp:at(10),day_volume:600000}],context:{prev_close:8,avg_premarket_volume_30d:100000,avg_volume_30d:600000,volume_today:600000,float_shares:10000000,news:[{published_at:new Date(minute.getTime()-600000).toISOString(),headline:'Company reports quarterly earnings'}]}};
   try {
-   const response=await fetch('/strategies/simulate-momentum',{method:'POST',headers:{'Content-Type':'application/json','X-Strategy-Admin-Token':cloudToken},body:JSON.stringify(payload),cache:'no-store'});
+   const response=await fetch('/strategies/simulate-program',{method:'POST',headers:{'Content-Type':'application/json','X-Strategy-Admin-Token':cloudToken},body:JSON.stringify(payload),cache:'no-store'});
    const data=await response.json();
    if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'Falló la simulación');
    const signals=data.actions.map(a=>a.action+' '+a.side+' '+String(a.price)+(a.stop?' stop '+String(a.stop):'')).join(' | ');
-   strategyEvaluationResults[item.id]='Prueba sintética · '+data.ticks_processed+' ticks · '+(signals||'sin señales')+' · sin órdenes reales.';
+   const armed=data.diagnostics&&data.diagnostics.armed===true?' · contexto armado':'';
+   strategyEvaluationResults[item.id]='Prueba sintética (no mercado real) · '+data.ticks_processed+' ticks · '+(signals||'motor ejecutado, sin señales')+armed+' · sin órdenes reales.';
   } catch(error) {
    strategyEvaluationResults[item.id]='Error en la prueba del motor: '+error.message;
   }
   renderStrategies();
   return;
  }
- if(button.dataset.action==='toggle'&&(item.strategyType||'formula')==='formula'){
+ if(button.dataset.action==='toggle'&&['formula','python_program'].includes(item.strategyType||'formula')){
+  if(!cloudMode||!cloudToken){strategyEvaluationResults[item.id]='Conecta el almacenamiento compartido de PostgreSQL antes de activar o desactivar estrategias.';renderStrategies();return;}
   const nextEnabled=!item.enabled;
   if(nextEnabled){
-   const otherAllocation=strategies.filter(s=>s.id!==item.id&&s.enabled&&(s.strategyType||'formula')==='formula').reduce((sum,s)=>sum+Number(s.allocationPercent||0),0);
+   const otherAllocation=strategies.filter(s=>s.id!==item.id&&s.enabled).reduce((sum,s)=>sum+Number(s.allocationPercent||0),0);
    const requestedAllocation=otherAllocation+Number(item.allocationPercent||0);
    if(requestedAllocation>100.000001){
     strategyEvaluationResults[item.id]='No se puede activar: las estrategias activas sumarían '+requestedAllocation.toFixed(2)+'% del capital. Reduce sus porcentajes a un máximo combinado de 100%.';
@@ -241,8 +258,9 @@ $('strategy-list').addEventListener('click',async event=>{
     return;
    }
   }
-  item.enabled=nextEnabled;
-  persistStrategies();renderStrategies();
+  const prior=item.enabled;item.enabled=nextEnabled;renderStrategies();
+  const saved=await persistStrategies();
+  if(!saved){item.enabled=prior;renderStrategies();}
  }
  if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;strategyType.value=item.strategyType||'formula';strategyType.dispatchEvent(new Event('change'));strategyAllocation.value=String(item.allocationPercent??10);updateBudgetPreview();$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
  if(button.dataset.action==='delete'){if(!confirm('¿Borrar la estrategia «'+item.name+'»?'))return;strategies=strategies.filter(s=>s.id!==item.id);if(editingStrategyId===item.id)resetStrategyForm();persistStrategies();renderStrategies()}
