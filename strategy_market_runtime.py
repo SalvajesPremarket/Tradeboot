@@ -94,3 +94,37 @@ class OneMinuteCandleBuilder:
             "ticks": 1,
             "complete": False,
         }
+
+
+class PersistentOneMinuteRuntime:
+    """Aggregate observed ticks and persist each newly closed candle.
+
+    This is an injectable processing stage, not a provider connection. The caller
+    must feed authentic, timestamped ticks from a verified continuous source.
+    """
+
+    def __init__(self, symbol, candle_store=None):
+        self.builder = OneMinuteCandleBuilder(symbol)
+        if candle_store is None:
+            from market_candle_store import store_closed_candle
+            candle_store = store_closed_candle
+        if not callable(candle_store):
+            raise ValueError("candle_store_must_be_callable")
+        self._store = candle_store
+
+    def on_tick(self, price, timestamp):
+        """Return persistence status when a candle closes, otherwise None."""
+        closed = self.builder.on_tick(price, timestamp)
+        if closed is None:
+            return None
+        result = self._store(closed)
+        return {
+            "symbol": closed["symbol"],
+            "timestamp": closed["timestamp"],
+            "candle": closed,
+            "persistence": result,
+        }
+
+    def current_candle(self):
+        """Expose the in-memory candle without marking it complete."""
+        return self.builder.current_candle()
