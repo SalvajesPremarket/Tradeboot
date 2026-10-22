@@ -324,6 +324,38 @@ class Handler(BaseHTTPRequestHandler):
     def _dispatch(self, head_only=False):
         # Ignore query parameters such as tracking tags added by browsers or link previews.
         path = urlsplit(self.path).path
+
+        if path == "/schwab/authorize":
+            try:
+                from schwab_integration import authorization_url
+                location = authorization_url()
+                self.send_response(302)
+                self.send_header("Location", location)
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            except ValueError as exc:
+                return self._json(503, {"ok": False, "error": str(exc)})
+        if path == "/schwab/callback":
+            from schwab_integration import complete_authorization
+            query = parse_qs(urlsplit(self.path).query)
+            status, payload = complete_authorization(query)
+            return self._json(status, payload)
+        if path == "/schwab/status":
+            from schwab_integration import get_status
+            status, payload = get_status()
+            return self._json(status, payload)
+        if path == "/schwab/quotes":
+            from schwab_integration import get_quotes
+            query = parse_qs(urlsplit(self.path).query)
+            raw_symbols = query.get("symbols", ["AAPL"])[0]
+            symbols = [item.strip().upper() for item in raw_symbols.split(",") if item.strip()]
+            allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_"
+            if not symbols or len(symbols) > 10 or any(len(item) > 20 or any(char not in allowed for char in item) for item in symbols):
+                return self._json(400, {"ok": False, "error": "invalid_symbols", "hint": "Use up to ten ticker symbols separated by commas."})
+            status, payload = get_quotes(symbols)
+            return self._json(status, payload)
         if path == "/health":
             return self._json(200, {"ok": True, "service": "Tradeboot"}, head_only)
         if path == "/":

@@ -49,6 +49,17 @@ def list_strategies():
     } for row in rows]
 
 
+def validate_program_selection(normalized):
+    """Only one of the four reviewed Python strategies may be active at a time."""
+    selected = [
+        row[1] for row in normalized
+        if row[3] == "python_program" and row[4]
+    ]
+    if len(selected) > 1:
+        raise ValueError("Activa solo una de las cuatro estrategias automáticas a la vez; desactiva las demás.")
+    return True
+
+
 def replace_strategies(items):
     now = datetime.now(timezone.utc)
     normalized = []
@@ -88,6 +99,7 @@ def replace_strategies(items):
             created_at = now
         normalized.append((sid, name.strip(), formula, strategy_type, enabled, float(allocation_percent), created_at, now))
     enabled_rows = [row for row in normalized if row[4]]
+    validate_program_selection(normalized)
     if sum(row[5] for row in enabled_rows) > 100.000001:
         raise ValueError("La asignación combinada de las estrategias activas no puede superar el 100% del capital general.")
     if len(normalized) > 1000:

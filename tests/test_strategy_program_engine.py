@@ -53,6 +53,7 @@ class StrategyProgramEngineTests(unittest.TestCase):
                 self.assertFalse(result["real_orders_enabled"])
                 self.assertEqual(result["ticks_processed"], 3)
                 self.assertIsInstance(result["actions"], list)
+                self.assertTrue(all(isinstance(action.get("event_at"), str) for action in result["actions"]))
 
     def test_modified_python_source_is_never_executed(self):
         module, _class_name, kind = _REGISTRY["JeanLong"]

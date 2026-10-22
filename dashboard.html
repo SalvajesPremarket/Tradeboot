@@ -37,6 +37,26 @@
   <article class="card"><div class="ticker"><div><div class="symbol">NVDA</div><div class="company">NVIDIA</div></div><span class="tag">CARGANDO</span></div><div class="price">—</div><div class="quality">Consultando cotización…</div></article>
 </section>
 
+<section class="panel" id="paper-trading-panel" style="margin-top:18px">
+  <div class="strategy-head">
+    <div><div class="eyebrow">Simulación persistente</div><h2>Paper trading · Resultados</h2><p>Entradas, salidas, stops, motivos y P/L guardados en PostgreSQL. No se envían órdenes reales.</p></div>
+    <button type="button" class="secondary" id="paper-refresh">Actualizar resultados ↻</button>
+  </div>
+  <div class="cards" style="margin-top:14px">
+    <article class="card"><div class="company">Estado del motor</div><div class="price" style="font-size:20px" id="paper-worker-status">Consultando…</div><div class="quality" id="paper-worker-time">Esperando estado</div></article>
+    <article class="card"><div class="company">Operaciones abiertas / cerradas</div><div class="price" style="font-size:24px" id="paper-counts">— / —</div><div class="quality">Registro persistente</div></article>
+    <article class="card"><div class="company">P/L realizado acumulado</div><div class="price" style="font-size:24px" id="paper-pnl">—</div><div class="quality">Solo operaciones cerradas</div></article>
+  </div>
+  <div id="paper-message" class="status-note" role="status" aria-live="polite">Cargando resultados del simulador…</div>
+  <div style="overflow-x:auto;margin-top:12px">
+    <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:760px">
+      <thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--line)">
+        <th style="padding:9px">Fecha</th><th style="padding:9px">Estrategia</th><th style="padding:9px">Símbolo</th><th style="padding:9px">Lado</th><th style="padding:9px">Estado</th><th style="padding:9px">Entrada</th><th style="padding:9px">Salida</th><th style="padding:9px">P/L USD</th><th style="padding:9px">Motivo</th>
+      </tr></thead><tbody id="paper-trades"><tr><td colspan="9" class="empty">Sin operaciones registradas.</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
 <section class="panel strategies" id="strategy-manager">
   <div class="strategy-head">
     <div><div class="eyebrow">Constructor de estrategias</div><h2>Mis estrategias</h2><p>Crea tantas estrategias como quieras. Ponles nombre, pega tus reglas o fórmula, guárdalas y activa/desactiva cada una por separado.</p></div>
@@ -318,6 +338,40 @@ async function refresh(){
    $('updated').textContent='Último intento: '+new Date().toLocaleString('es-CR',{hour12:false});
  }finally{btn.disabled=false}
 }
+function paperEscape(value){return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
+function paperMoney(value){return value==null?'—':Number(value).toLocaleString('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2,maximumFractionDigits:2});}
+async function refreshPaperTrading(){
+ const message=$('paper-message'), button=$('paper-refresh');
+ if(button)button.disabled=true;
+ try{
+  const response=await fetch('/paper-trading/status',{cache:'no-store'});
+  const data=await response.json();
+  if(!response.ok||!data.ok)throw new Error(data.error||'Almacenamiento de paper trading no disponible');
+  const worker=data.worker||{};
+  $('paper-worker-status').textContent=worker.status||'sin estado';
+  $('paper-worker-time').textContent=worker.last_cycle_at?'Último ciclo: '+new Date(worker.last_cycle_at).toLocaleString('es-CR',{hour12:false}):'Aún no hay un ciclo registrado';
+  $('paper-counts').textContent=String(data.open_trades??0)+' / '+String(data.closed_trades??0);
+  $('paper-pnl').textContent=paperMoney(data.realized_pnl_usd);
+  $('paper-message').textContent='Modo '+(data.mode||'paper_only')+' · '+String(worker.active_program_strategies??0)+' motores Python activos · '+String(worker.active_formula_strategies??0)+' estrategias de fórmula activas · órdenes reales deshabilitadas.';
+  const trades=Array.isArray(data.trades)?data.trades:[];
+  $('paper-trades').innerHTML=trades.length?trades.map(t=>'<tr style="border-bottom:1px solid var(--line)">'+
+   '<td style="padding:9px">'+paperEscape(t.exit_at||t.entry_at||'')+'</td>'+
+   '<td style="padding:9px">'+paperEscape(t.strategy_name)+'</td>'+
+   '<td style="padding:9px">'+paperEscape(t.symbol)+'</td>'+
+   '<td style="padding:9px">'+paperEscape(t.side||'LONG')+'</td>'+
+   '<td style="padding:9px">'+paperEscape(t.status)+'</td>'+
+   '<td style="padding:9px">'+paperMoney(t.entry_price)+'</td>'+
+   '<td style="padding:9px">'+paperMoney(t.exit_price)+'</td>'+
+   '<td style="padding:9px">'+paperMoney(t.pnl_usd)+'</td>'+
+   '<td style="padding:9px">'+paperEscape(t.exit_reason||'—')+'</td></tr>').join(''):'<tr><td colspan="9" class="empty">Todavía no hay operaciones. El motor no abrirá operaciones si faltan datos de mercado válidos.</td></tr>';
+ }catch(e){
+  $('paper-worker-status').textContent='No disponible';
+  $('paper-worker-time').textContent='No se pudo leer el estado';
+  $('paper-message').textContent='No se pudo consultar PostgreSQL: '+e.message;
+  $('paper-trades').innerHTML='<tr><td colspan="9" class="empty">Historial no disponible.</td></tr>';
+ }finally{if(button)button.disabled=false}
+}
+$('paper-refresh').addEventListener('click',refreshPaperTrading);refreshPaperTrading();setInterval(refreshPaperTrading,30000);
 $('refresh').addEventListener('click',refresh);refresh();setInterval(refresh,30000);
 </script>
 </body>

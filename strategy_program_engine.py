@@ -128,7 +128,9 @@ def simulate_program(payload):
         bot.set_context(clean_context)
         bot.seed(candles)
         for tick in clean_ticks:
-            actions.extend(bot.on_tick(tick["price"], tick["timestamp"], tick["day_volume"]))
+            for action in bot.on_tick(tick["price"], tick["timestamp"], tick["day_volume"]):
+                action["event_at"] = tick["timestamp"].isoformat()
+                actions.append(action)
         position = dict(bot.pos) if bot.pos else None
         diagnostics = {"last_reject_reasons": bot.last_reject, "last_metrics": bot.last_metrics}
     else:
@@ -162,7 +164,9 @@ def simulate_program(payload):
         bot.set_context(*contexts)
         bot.seed(candles)
         for tick in clean_ticks:
-            actions.extend(bot.on_tick(tick["price"], tick["timestamp"]))
+            for action in bot.on_tick(tick["price"], tick["timestamp"]):
+                action["event_at"] = tick["timestamp"].isoformat()
+                actions.append(action)
         position = dict(bot.pos) if bot.pos else None
         diagnostics = {"armed": bot.armed, "levels": bot.levels, "level_names": bot.level_names,
                        "last_reject_reasons": bot.last_reject}
