@@ -169,7 +169,7 @@ def complete_authorization(query):
             "authenticated": True,
             "message": "Schwab OAuth completed. Tokens were stored encrypted.",
         }
-    except (ValueError, StrategyStoreUnavailable, Exception) as exc:
+    except Exception as exc:
         # Error names only; never return credentials or provider response bodies.
         return 503, {"ok": False, "error": str(exc) if str(exc).startswith("schwab_") else "schwab_token_storage_unavailable"}
 
@@ -213,7 +213,9 @@ def get_status():
             "ok": True,
             "provider": "schwab",
             "configured": configured,
-            "authorized": authorized or has_refresh,
+            "authorized": authorized,
+            "refresh_token_present": has_refresh,
+            "connection_verified": False,
             "access_token_cached": bool(tokens.get("access_token") and int(tokens.get("expires_at") or 0) > int(time.time())),
             "market_data_read_only": True,
             "real_orders_enabled": False,
