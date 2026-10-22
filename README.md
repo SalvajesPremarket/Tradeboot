@@ -8,7 +8,9 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 - Dashboard que actualiza snapshots puntuales de hasta cinco símbolos cada 30 segundos y evalúa las estrategias activadas como señales simuladas.
 - Endpoint de diagnóstico WebSocket que autentica, solicita snapshots y cierra la conexión; todavía no es un consumidor continuo de streaming.
 - Indicadores de antigüedad, estado de mercado y señales de datos retrasados cuando eToro los proporciona.
-- El escaneo `/engine/demo-scan` es de solo lectura: exige el token administrativo, evalúa hasta cinco símbolos con cotizaciones válidas y no infiere LONG/SHORT ni envía órdenes. No es todavía un worker continuo.
+- El escaneo `/engine/demo-scan` es de solo lectura: exige el token administrativo, evalúa hasta cinco símbolos con cotizaciones válidas y no infiere LONG/SHORT ni envía órdenes.
+- `demo_scan_worker.py` permite ciclos continuos de escaneo, sin órdenes, cada 30–3600 segundos. Configura `TRADEBOOT_SCAN_SYMBOLS` con 1–5 símbolos y `TRADEBOOT_SCAN_INTERVAL_SECONDS` (por defecto 60). En Render, debe configurarse como Background Worker con comando `python demo_scan_worker.py`, además de las variables `DATABASE_URL`, `ETORO_API_KEY` y `ETORO_USER_KEY` existentes.
+- El worker es código publicado pero no queda activo en Render automáticamente; necesita crear/configurar el servicio Background Worker y sus variables de entorno.
 - La ejecución Demo de una sola evaluación sigue separada y protegida por límites; no se habilita trading real ni un bucle autónomo de órdenes.
 - Las estrategias se guardan localmente en el navegador salvo que se configure el almacenamiento compartido con `TRADEBOOT_STRATEGY_ADMIN_TOKEN` y la base de datos correspondiente.
 - La calidad de cotización no se puede confirmar completamente cuando el proveedor omite metadatos.
@@ -34,6 +36,7 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 - `POST /strategies/validate` — validar o evaluar una fórmula con los valores recibidos.
 - `POST /strategies/evaluate-market` — evaluar una fórmula con una cotización eToro que cumpla los controles de calidad.
 - `POST /engine/demo-scan` — escaneo autenticado de hasta cinco símbolos con la única estrategia de fórmula activada; solo informa señales y nunca envía órdenes.
+- `demo_scan_worker.py` — proceso continuo de escaneo de solo lectura para ejecutarse como Render Background Worker; usa `TRADEBOOT_SCAN_SYMBOLS` y `TRADEBOOT_SCAN_INTERVAL_SECONDS`.
 - `POST /strategies/validate-program` — validar la sintaxis de un programa Python completo sin ejecutarlo.
 - `POST /strategies/simulate-momentum` — probar el motor integrado Momentum Tramos con velas/ticks sintéticos o históricos; requiere `X-Strategy-Admin-Token`, procesa como máximo 5.000 velas y 5.000 ticks, y solo emite señales simuladas.
 
