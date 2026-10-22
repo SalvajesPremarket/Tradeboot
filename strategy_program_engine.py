@@ -154,7 +154,9 @@ def simulate_program(payload):
                           "reasons": [f"context_error:{type(exc).__name__}"], "metrics": {}}
             contexts.append(result)
         daily_contexts = contexts
-        capital = _number(payload.get("capital", 10000), "capital", nonnegative=True)
+        if "capital" not in payload:
+            raise ValueError("The simulation must receive the strategy budget calculated from saved general capital and allocation percent.")
+        capital = _number(payload.get("capital"), "capital", nonnegative=True)
         sizer = module.PositionSizer(capital=capital, daily_pct=100)
         bot = getattr(module, class_name)(symbol, sizer)
         bot.set_context(*contexts)
