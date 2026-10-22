@@ -167,6 +167,39 @@ def close_demo_position(position_id: int, instrument_id: int) -> dict:
         raise EtoroExecutionError("etoro_close_request_failed") from None
 
 
+def summarize_demo_order_status(requested_order_id: int, data: dict) -> dict:
+    """Classify an order only when the broker response identifies that exact order."""
+    if isinstance(requested_order_id, bool) or not isinstance(requested_order_id, int) or requested_order_id <= 0:
+        raise EtoroExecutionError("invalid_order_id")
+    if not isinstance(data, dict):
+        return {"broker_status": None, "broker_confirmation": "not_verified"}
+    returned_id = None
+    for field in ("orderId", "OrderId", "orderID", "OrderID", "order_id"):
+        candidate = data.get(field)
+        if isinstance(candidate, int) and not isinstance(candidate, bool):
+            returned_id = candidate
+            break
+        if isinstance(candidate, str) and candidate.strip().isdigit():
+            returned_id = int(candidate.strip())
+            break
+    status_value = data.get("status")
+    if isinstance(status_value, dict):
+        status_name = status_value.get("name") or status_value.get("Name")
+    elif isinstance(status_value, str):
+        status_name = status_value
+    else:
+        status_name = data.get("statusName") or data.get("state")
+    status_name = status_name.strip() if isinstance(status_name, str) else None
+    confirmation = "not_verified"
+    if returned_id == requested_order_id and status_name:
+        normalized = status_name.casefold()
+        if normalized in {"filled", "executed"}:
+            confirmation = "confirmed_filled"
+        elif normalized in {"rejected", "failed"}:
+            confirmation = "confirmed_rejected"
+    return {"broker_status": status_name, "broker_confirmation": confirmation}
+
+
 def get_demo_order_information(order_id: int) -> dict:
     """Read status and fills for one eToro Demo order; does not mutate broker state."""
     if os.environ.get("ETORO_TRADING_MODE", "disabled").strip().lower() != "demo":
