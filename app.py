@@ -20,7 +20,7 @@ from strategy_engine import StrategyFormulaError, evaluate_formula, validate_for
 from strategy_program import validate_strategy_source
 from strategy_simulation import simulate_momentum
 from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital
-from etoro_execution import EtoroExecutionError, open_market_order
+from etoro_execution import EtoroExecutionError, open_market_order, close_demo_position
 
 
 module = Tradeboot()
@@ -646,7 +646,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        if path not in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market", "/strategies/simulate-momentum", "/engine/demo-evaluate"):
+        if path not in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market", "/strategies/simulate-momentum", "/engine/demo-evaluate", "/engine/demo-close"):
             return self._json(404, {"ok": False, "error": "not_found"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -662,6 +662,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "invalid_json"})
         if not isinstance(payload, dict):
             return self._json(400, {"ok": False, "error": "json_object_required"})
+        if path == "/engine/demo-close":
+            if not self._strategy_admin_authorized():
+                return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
+            if os.environ.get("ETORO_TRADING_MODE", "disabled").strip().lower() != "demo":
+                return self._json(409, {"ok": False, "error": "demo_mode_required"})
+            position_id = payload.get("positionId")
+            instrument_id = payload.get("instrumentId")
+            for field, value in (("positionId", position_id), ("instrumentId", instrument_id)):
+                if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                    return self._json(400, {"ok": False, "error": field + "_must_be_positive_integer"})
+            try:
+                result = close_demo_position(position_id, instrument_id)
+                return self._json(200, {
+                    "ok": True, "mode": "demo", "close_submitted": True,
+                    "confirmation_required": True, "execution": result,
+                })
+            except EtoroExecutionError as exc:
+                return self._json(502, {"ok": False, "error": str(exc)})
         if path == "/engine/demo-evaluate":
             if not self._strategy_admin_authorized():
                 return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
