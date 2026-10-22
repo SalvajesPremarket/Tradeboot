@@ -31,6 +31,18 @@ ETORO_TIMEOUT_SECONDS = 15
 DEFAULT_MAX_QUOTE_AGE_SECONDS = 300
 
 
+
+def demo_allocation_cap(general_capital, allocation_percent):
+    """Return the strategy's USD allocation ceiling or reject unsafe configuration."""
+    if (isinstance(general_capital, bool) or not isinstance(general_capital, (int, float))
+            or not math.isfinite(general_capital) or general_capital <= 0):
+        raise ValueError("valid_general_capital_required")
+    if (isinstance(allocation_percent, bool) or not isinstance(allocation_percent, (int, float))
+            or not math.isfinite(allocation_percent) or not 0 < allocation_percent <= 100):
+        raise ValueError("valid_strategy_allocation_required")
+    return float(general_capital) * float(allocation_percent) / 100.0
+
+
 def _parse_provider_bool(value):
     """Parse provider booleans without treating strings like 'False' as true."""
     if isinstance(value, bool):
@@ -711,15 +723,12 @@ class Handler(BaseHTTPRequestHandler):
                 # per-order ceiling; caller-supplied amount alone must not set risk.
                 general_capital = get_general_capital()
                 allocation_percent = strategy.get("allocationPercent", 0)
-                if (not isinstance(general_capital, (int, float)) or isinstance(general_capital, bool)
-                        or not math.isfinite(general_capital) or general_capital <= 0
-                        or not isinstance(allocation_percent, (int, float))
-                        or isinstance(allocation_percent, bool) or not math.isfinite(allocation_percent)
-                        or allocation_percent <= 0 or allocation_percent > 100):
+                try:
+                    allocation_cap = demo_allocation_cap(general_capital, allocation_percent)
+                except ValueError:
                     return self._json(409, {
                         "ok": False, "error": "valid_general_capital_and_strategy_allocation_required",
                     })
-                allocation_cap = general_capital * allocation_percent / 100.0
                 if amount > allocation_cap:
                     return self._json(409, {
                         "ok": False, "error": "order_exceeds_strategy_allocation",
