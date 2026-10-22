@@ -32,12 +32,12 @@ def list_strategies():
                 formula TEXT NOT NULL,
                 strategy_type TEXT NOT NULL DEFAULT 'formula',
                 enabled BOOLEAN NOT NULL DEFAULT FALSE,
-                allocation_percent DOUBLE PRECISION NOT NULL DEFAULT 10,
+                allocation_percent DOUBLE PRECISION NOT NULL DEFAULT 0,
                 created_at TIMESTAMPTZ NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL
             )
         """)
-        conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS allocation_percent DOUBLE PRECISION NOT NULL DEFAULT 10")
+        conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS allocation_percent DOUBLE PRECISION NOT NULL DEFAULT 0")
         conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS strategy_type TEXT NOT NULL DEFAULT 'formula'")
         rows = conn.execute(
             "SELECT id, name, formula, enabled, created_at, allocation_percent, strategy_type FROM tradeboot_strategies ORDER BY created_at, id"
@@ -60,7 +60,7 @@ def replace_strategies(items):
         formula = item.get("formula")
         strategy_type = item.get("strategyType", "formula")
         enabled = item.get("enabled", False)
-        allocation_percent = item.get("allocationPercent", 10)
+        allocation_percent = item.get("allocationPercent", 0)
         created = item.get("createdAt")
         if not isinstance(sid, str) or not sid or len(sid) > 100:
             raise ValueError("Strategy ID is invalid.")
@@ -104,7 +104,7 @@ def replace_strategies(items):
                     updated_at TIMESTAMPTZ NOT NULL
                 )
             """)
-            conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS allocation_percent DOUBLE PRECISION NOT NULL DEFAULT 10")
+            conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS allocation_percent DOUBLE PRECISION NOT NULL DEFAULT 0")
             conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS strategy_type TEXT NOT NULL DEFAULT 'formula'")
             conn.execute("DELETE FROM tradeboot_strategies")
             if normalized:

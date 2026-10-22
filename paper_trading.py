@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 
 from strategy_store import _connect, list_strategies, get_general_capital
 from strategy_engine import evaluate_formula, StrategyFormulaError
-from app import fetch_market_context, fetch_historical_candles, market_values_from_rate_row
+from app import fetch_market_context, fetch_historical_candles, market_values_from_rate_row, fetch_fmp_float
 
 _INTERVAL = max(30, int(os.environ.get("PAPER_TRADING_INTERVAL_SECONDS", "60")))
 _STOP_PCT = max(0.1, min(20.0, float(os.environ.get("PAPER_TRADING_STOP_PCT", "2"))))
@@ -167,7 +167,7 @@ def run_cycle():
             matches.append({"strategy_id":strategy["id"],"strategy_name":strategy["name"],"symbol":symbol,
                             "matched":matched,"price":price,"at":started.isoformat()})
             matches = matches[-50:]
-            allocation = capital * float(strategy.get("allocationPercent",10))/100
+            allocation = capital * float(strategy.get("allocationPercent",0))/100
             with _connect() as conn:
                 _init_tables(conn)
                 with conn.transaction():
@@ -327,7 +327,7 @@ def _build_program_bot(strategy, symbol, history):
         # reject entries until those mandatory data sources are configured.
         bot.set_context({"prev_close": prev_close, "avg_volume_30d": avg_volume,
                          "avg_premarket_volume_30d": None, "volume_today": None,
-                         "float_shares": None, "news": []})
+                         "float_shares": (fetch_fmp_float(symbol) or {}).get("floatShares"), "news": []})
         bot.seed([{k: row[k] for k in ("open", "high", "low", "close")} for row in minute_rows])
     else:
         import pandas as pd
