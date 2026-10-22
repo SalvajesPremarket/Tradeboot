@@ -53,7 +53,9 @@ class DemoSignalScanTests(unittest.TestCase):
         strategy = {**self.strategy, "strategyType": "python_program"}
         result = evaluate_demo_scan_snapshot(strategy, "ABC", self.market)
         self.assertFalse(result["ok"])
-        self.assertEqual(result["error"], "formula_strategy_required")
+        self.assertEqual(result["error"], "python_program_requires_tick_runtime")
+        self.assertFalse(result["runtime_ready"])
+        self.assertIn("continuous_ticks", result["missing_inputs"])
         self.assertEqual(result["execution"], "not_attempted")
 
 
