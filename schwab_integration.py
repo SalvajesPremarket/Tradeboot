@@ -275,7 +275,7 @@ def get_price_history(symbol, *, daily=False):
         }
     else:
         params = {
-            "symbol": symbol, "periodType": "day", "period": 1,
+            "symbol": symbol, "periodType": "day", "period": 5,
             "frequencyType": "minute", "frequency": 1,
             "needExtendedHoursData": "true",
         }
