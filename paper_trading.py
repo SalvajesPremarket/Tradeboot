@@ -158,12 +158,21 @@ def run_cycle():
                               exit_at=%s,exit_reason=%s,last_quote_at=%s WHERE id=%s""",
                               (price,pnl,started,reason,quote_at,tid))
                     elif matched and allocation > 0:
-                        qty = allocation / price
-                        conn.execute("""INSERT INTO tradeboot_paper_trades
-                          (strategy_id,strategy_name,symbol,status,entry_price,quantity,allocated_usd,stop_price,take_price,entry_at,last_quote_at)
-                          VALUES (%s,%s,%s,'OPEN',%s,%s,%s,%s,%s,%s,%s)""",
-                          (strategy["id"],strategy["name"],symbol,price,qty,allocation,price*(1-_STOP_PCT/100),
-                           price*(1+_TAKE_PCT/100),started,quote_at))
+                        # The configured percentage is a TOTAL strategy exposure cap,
+                        # shared across all symbols, not a fresh allocation per ticker.
+                        already_allocated = conn.execute("""
+                            SELECT COALESCE(SUM(allocated_usd), 0)
+                            FROM tradeboot_paper_trades
+                            WHERE strategy_id=%s AND status='OPEN'
+                        """, (strategy["id"],)).fetchone()[0]
+                        remaining_allocation = max(0.0, allocation - float(already_allocated or 0))
+                        if remaining_allocation > 0:
+                            qty = remaining_allocation / price
+                            conn.execute("""INSERT INTO tradeboot_paper_trades
+                              (strategy_id,strategy_name,symbol,status,entry_price,quantity,allocated_usd,stop_price,take_price,entry_at,last_quote_at)
+                              VALUES (%s,%s,%s,'OPEN',%s,%s,%s,%s,%s,%s,%s)""",
+                              (strategy["id"],strategy["name"],symbol,price,qty,remaining_allocation,price*(1-_STOP_PCT/100),
+                               price*(1+_TAKE_PCT/100),started,quote_at))
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
                       "symbols":symbols,"active_formula_strategies":len(active),
                       "active_program_strategies":len(active_programs),
