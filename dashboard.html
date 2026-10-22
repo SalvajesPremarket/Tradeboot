@@ -259,7 +259,7 @@ $('strategy-list').addEventListener('click',async event=>{
  const button=event.target.closest('button[data-action]');if(!button)return;
  const item=strategies.find(s=>s.id===button.dataset.id);if(!item)return;
  if(button.dataset.action==='simulate'){
-  if(!cloudMode||!cloudToken){strategyEvaluationResults[item.id]='Conecta primero el almacenamiento compartido para autorizar la prueba del motor.';renderStrategies();return;}
+  if(!cloudMode||!accountUser){strategyEvaluationResults[item.id]='Inicia sesión con una cuenta autorizada y espera a que PostgreSQL se conecte para probar el motor.';renderStrategies();return;}
   strategyEvaluationResults[item.id]='Ejecutando prueba sintética del motor…';renderStrategies();
   const now=new Date(),minute=new Date(now);minute.setSeconds(0,0);
   const historical=Array.from({length:220},(_,i)=>{const p=i===218?8.39:i===219?8.41:8.4;return {open:p,high:p+.03,low:p-.03,close:p};});
