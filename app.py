@@ -310,6 +310,81 @@ def fetch_market_context(symbol):
     }
 
 
+def fetch_historical_candles(instrument_id, interval="OneMinute", count=220):
+    """Fetch normalized OHLCV bars from eToro's documented candle-history endpoint."""
+    allowed_intervals = {"OneMinute", "FiveMinutes", "TenMinutes", "FifteenMinutes",
+                         "ThirtyMinutes", "OneHour", "FourHours", "OneDay", "OneWeek"}
+    try:
+        instrument_id = int(instrument_id)
+        count = int(count)
+    except (TypeError, ValueError):
+        return 400, {"ok": False, "error": "invalid_candle_parameters"}
+    if instrument_id <= 0 or interval not in allowed_intervals or not 1 <= count <= 1000:
+        return 400, {"ok": False, "error": "invalid_candle_parameters"}
+    api_path = f"market-data/instruments/{instrument_id}/history/candles/desc/{interval}/{count}"
+    status, result = etoro_get(api_path)
+    if status != 200 or not result.get("ok"):
+        return status, {"ok": False, "error": result.get("error", "historical_candles_unavailable"),
+                        "upstream_status": status, "instrument_id": instrument_id, "interval": interval}
+    data = result.get("data")
+    rows = []
+    def collect(value):
+        if isinstance(value, dict):
+            keys = {str(k).lower() for k in value}
+            if ({"open", "high", "low", "close"} <= keys or
+                {"openprice", "highprice", "lowprice", "closeprice"} <= keys):
+                rows.append(value)
+            else:
+                for child in value.values():
+                    if isinstance(child, (dict, list)):
+                        collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                if isinstance(child, (dict, list)):
+                    collect(child)
+    collect(data)
+    def pick(row, *names):
+        lower = {str(k).lower(): v for k, v in row.items()}
+        for name in names:
+            value = lower.get(name.lower())
+            if value is not None and value != "":
+                return value
+        return None
+    candles = []
+    for row in rows:
+        try:
+            o = float(pick(row, "open", "openPrice"))
+            h = float(pick(row, "high", "highPrice"))
+            lo = float(pick(row, "low", "lowPrice"))
+            c = float(pick(row, "close", "closePrice"))
+            stamp = pick(row, "fromDate", "startDate", "timestamp", "date", "time", "from", "candleDate")
+            if stamp is None:
+                continue
+            parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            vol_raw = pick(row, "volume", "volumeInUnits", "VolumeInUnits", "tickVolume")
+            vol = float(vol_raw) if vol_raw is not None else None
+            if not all(math.isfinite(v) and v > 0 for v in (o, h, lo, c)):
+                continue
+            if lo > min(o, c) or h < max(o, c) or lo > h or (vol is not None and (not math.isfinite(vol) or vol < 0)):
+                continue
+            item = {"timestamp": parsed.astimezone(timezone.utc).isoformat(),
+                    "open": o, "high": h, "low": lo, "close": c}
+            if vol is not None:
+                item["volume"] = vol
+            candles.append(item)
+        except (TypeError, ValueError, OverflowError):
+            continue
+    unique = {item["timestamp"]: item for item in candles}
+    candles = sorted(unique.values(), key=lambda item: item["timestamp"])
+    if not candles:
+        return 502, {"ok": False, "error": "provider_returned_no_valid_ohlcv",
+                     "instrument_id": instrument_id, "interval": interval}
+    return 200, {"ok": True, "instrument_id": instrument_id, "interval": interval,
+                 "count": len(candles), "candles": candles}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _json(self, status, payload, head_only=False):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -347,6 +422,26 @@ class Handler(BaseHTTPRequestHandler):
                 }, head_only)
         if path in ("/status", "/watchlist"):
             return self._json(200, module.snapshot(), head_only)
+        if path == "/etoro/instrument-candles":
+            query = parse_qs(urlsplit(self.path).query)
+            symbol = query.get("symbol", ["AAPL"])[0].strip().upper()
+            interval = query.get("interval", ["OneMinute"])[0]
+            try:
+                count = int(query.get("count", ["220"])[0])
+            except (TypeError, ValueError):
+                return self._json(400, {"ok": False, "error": "invalid_candle_parameters"}, head_only)
+            allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_"
+            if not symbol or len(symbol) > 20 or any(char not in allowed for char in symbol):
+                return self._json(400, {"ok": False, "error": "invalid_symbol"}, head_only)
+            if interval not in {"OneMinute","FiveMinutes","TenMinutes","FifteenMinutes","ThirtyMinutes","OneHour","FourHours","OneDay","OneWeek"} or not 1 <= count <= 1000:
+                return self._json(400, {"ok": False, "error": "invalid_candle_parameters"}, head_only)
+            status, market = fetch_market_context(symbol)
+            instrument_id = market.get("instrument_id")
+            if not instrument_id:
+                return self._json(502, {"ok": False, "error": "instrument_resolution_failed", "symbol": symbol}, head_only)
+            candle_status, payload = fetch_historical_candles(instrument_id, interval, count)
+            payload["symbol"] = symbol
+            return self._json(candle_status, payload, head_only)
         if path == "/etoro/instrument-rates":
             query = parse_qs(urlsplit(self.path).query)
             symbols_raw = query.get("symbols", [""])[0]
