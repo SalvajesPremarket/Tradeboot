@@ -21,8 +21,8 @@ from strategy_engine import StrategyFormulaError, evaluate_formula, validate_for
 from strategy_program import validate_strategy_source
 from strategy_simulation import simulate_momentum
 from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital
-from demo_execution_store import reserve_demo_execution, finish_demo_execution
-from etoro_execution import EtoroExecutionError, open_market_order, close_demo_position
+from demo_execution_store import reserve_demo_execution, finish_demo_execution, list_demo_executions
+from etoro_execution import EtoroExecutionError, open_market_order, close_demo_position, get_demo_portfolio
 
 
 module = Tradeboot()
@@ -858,15 +858,30 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
-        if path in ("/strategies", "/strategies/capital"):
+        if path in ("/strategies", "/strategies/capital", "/engine/demo-reconcile"):
             if not self._strategy_admin_authorized():
                 return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
             try:
                 if path == "/strategies/capital":
                     return self._json(200, {"ok": True, "capital": get_general_capital()})
-                return self._json(200, {"ok": True, "strategies": list_strategies()})
+                if path == "/strategies":
+                    return self._json(200, {"ok": True, "strategies": list_strategies()})
+                if os.environ.get("ETORO_TRADING_MODE", "disabled").strip().lower() != "demo":
+                    return self._json(409, {"ok": False, "error": "demo_mode_required"})
+                portfolio = get_demo_portfolio()
+                executions = list_demo_executions(100)
+                return self._json(200, {
+                    "ok": True, "mode": "demo",
+                    "reconciliation_status": "manual_review_required",
+                    "confirmation_required": True,
+                    "portfolio_snapshot": portfolio,
+                    "recent_executions": executions,
+                    "hint": "Read-only snapshot only. Do not retry pending/unknown/submitted orders until broker order/position state is matched and verified.",
+                })
             except StrategyStoreUnavailable as exc:
                 return self._json(503, {"ok": False, "error": str(exc)})
+            except EtoroExecutionError as exc:
+                return self._json(502, {"ok": False, "error": str(exc)})
         self._dispatch()
 
     def do_PUT(self):
