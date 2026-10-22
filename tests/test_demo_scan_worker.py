@@ -31,6 +31,22 @@ class DemoScanWorkerTests(unittest.TestCase):
 
     @patch("demo_scan_worker.fetch_market_context")
     @patch("demo_scan_worker.list_strategies")
+    def test_python_program_reports_missing_tick_runtime_without_scanning(self, strategies, market):
+        strategies.return_value = [{
+            "id": "292a064d-149c-4187-a50a-1d75a3f7a4cd",
+            "name": "JeanLong", "enabled": True,
+            "strategyType": "python_program", "formula": "trusted module source",
+        }]
+        result = demo_scan_worker.scan_once(["ABC"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "python_program_requires_tick_runtime")
+        self.assertFalse(result["runtime_ready"])
+        self.assertIn("continuous_ticks", result["missing_inputs"])
+        self.assertEqual(result["orders_submitted"], 0)
+        market.assert_not_called()
+
+    @patch("demo_scan_worker.fetch_market_context")
+    @patch("demo_scan_worker.list_strategies")
     def test_bad_market_context_does_not_crash_cycle(self, strategies, market):
         strategies.return_value = [self.strategy]
         market.return_value = (502, {"ok": False, "error": "provider_down"})
