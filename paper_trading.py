@@ -346,8 +346,12 @@ def _build_program_bot(strategy, symbol, history):
         bot = getattr(module, class_name)(symbol, sizer)
         bot.seed([{k: row[k] for k in ("open", "high", "low", "close")} for row in minute_rows])
         bot.set_context(*contexts)
+        blocker = None
+        if not any(context.get("armed") for context in contexts):
+            reasons = list(dict.fromkeys(reason for context in contexts for reason in context.get("reasons", [])))
+            blocker = "contexto D/W sin armar: " + "; ".join(reasons[:6])
     return {"bot": bot, "module": module, "kind": kind, "signature": _program_signature(strategy),
-            "strategy": strategy, "symbol": symbol}, None
+            "strategy": strategy, "symbol": symbol, "initial_blocker": locals().get("blocker")}, None
 
 
 
@@ -388,8 +392,16 @@ def _refresh_pullback_contexts(symbol, tick_at, price, day_volume):
             if bot_symbol != symbol or entry.get("kind") != "pullback":
                 continue
             module = entry["module"]
-            entry["bot"].set_context(module.daily_context(frame, info, "D"),
-                                     module.daily_context(module.to_weekly(frame), info, "W"))
+            contexts = [module.daily_context(frame, info, "D"),
+                        module.daily_context(module.to_weekly(frame), info, "W")]
+            entry["bot"].set_context(*contexts)
+            if not any(context.get("armed") for context in contexts):
+                reasons = list(dict.fromkeys(reason for context in contexts for reason in context.get("reasons", [])))
+                with _STREAM_TICK_LOCK:
+                    _stream_state.setdefault("strategy_blockers", {})[str(entry["strategy"]["id"])] = ("contexto D/W sin armar: " + "; ".join(reasons[:6]))[:500]
+            else:
+                with _STREAM_TICK_LOCK:
+                    _stream_state.setdefault("strategy_blockers", {}).pop(str(entry["strategy"]["id"]), None)
     except Exception as exc:
         with _STREAM_TICK_LOCK:
             _stream_state["last_error"] = "daily_context_refresh:"+type(exc).__name__
@@ -499,7 +511,10 @@ def _process_stream_tick(tick, active_strategies):
                 continue
             entry = built
             with _STREAM_TICK_LOCK:
-                _stream_state.setdefault("strategy_blockers", {}).pop(strategy_id, None)
+                if entry.get("initial_blocker"):
+                    _stream_state.setdefault("strategy_blockers", {})[strategy_id] = entry["initial_blocker"][:500]
+                else:
+                    _stream_state.setdefault("strategy_blockers", {}).pop(strategy_id, None)
             # Rebuild state from recent real stream ticks after a process restart; don't
             # record these replayed actions a second time.
             minute_rows = history.get("minute", [])
