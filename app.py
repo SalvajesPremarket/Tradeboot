@@ -776,7 +776,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        if path not in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market", "/strategies/simulate-momentum", "/engine/demo-scan", "/engine/demo-evaluate", "/engine/demo-close"):
+        if path not in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market", "/strategies/simulate-momentum", "/strategies/simulate-program", "/engine/demo-scan", "/engine/demo-evaluate", "/engine/demo-close"):
             return self._json(404, {"ok": False, "error": "not_found"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
