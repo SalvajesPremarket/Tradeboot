@@ -351,7 +351,6 @@ def _record_program_action(strategy, symbol, action, price, tick_at):
     capital = get_general_capital()
     allocation = max(0.0, capital * float(strategy.get("allocationPercent", 0) or 0) / 100.0)
     with _connect() as conn:
-        _init_tables(conn)
         with conn.transaction():
             conn.execute("UPDATE tradeboot_paper_trades SET last_price=%s,last_quote_at=%s WHERE strategy_id=%s AND symbol=%s AND status='OPEN'",
                          (price, tick_at, strategy["id"], symbol))
@@ -421,7 +420,6 @@ def _process_stream_tick(tick, active_strategies):
             except (TypeError, ValueError, OverflowError):
                 day_volume = None
     with _connect() as conn:
-        _init_tables(conn)
         tick_id = conn.execute("""INSERT INTO tradeboot_market_ticks(symbol,instrument_id,price,tick_at,day_volume)
                         VALUES (%s,%s,%s,%s,%s) RETURNING id""",
                      (symbol,instrument_id,price,tick_at,day_volume)).fetchone()[0]
@@ -452,7 +450,6 @@ def _process_stream_tick(tick, active_strategies):
             # Rebuild state from recent real stream ticks after a process restart; don't
             # record these replayed actions a second time.
             with _connect() as conn:
-                _init_tables(conn)
                 replay = conn.execute("""SELECT price,tick_at,day_volume FROM tradeboot_market_ticks
                     WHERE symbol=%s AND tick_at >= %s AND id < %s ORDER BY tick_at ASC,id ASC""",
                     (symbol, datetime.now(timezone.utc).replace(hour=0,minute=0,second=0,microsecond=0), tick_id)).fetchall()
