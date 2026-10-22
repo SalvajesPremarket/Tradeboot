@@ -42,6 +42,7 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 - `GET /engine/demo-order-status?order_id=123` — consulta el estado y los detalles de una orden específica en eToro Demo mediante la API oficial de solo lectura; requiere autenticación administrativa y `ETORO_TRADING_MODE=demo`.
 - `POST /strategies/validate-program` — validar la sintaxis de un programa Python completo sin ejecutarlo.
 - `POST /strategies/simulate-momentum` — probar el motor integrado Momentum Tramos con velas/ticks sintéticos o históricos; requiere `X-Strategy-Admin-Token`, procesa como máximo 5.000 velas y 5.000 ticks, y solo emite señales simuladas.
+- `POST /strategies/simulate-program` — reproducir uno de los cuatro programas Python allowlisted con velas, ticks y contexto proporcionados por el usuario; requiere `X-Strategy-Admin-Token`, procesa hasta 2.000 velas iniciales y 5.000 ticks, y nunca envía órdenes. No reemplaza el runtime continuo.
 
 ## Campos de calidad
 
