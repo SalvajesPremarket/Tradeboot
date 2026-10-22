@@ -44,3 +44,29 @@ def finish_demo_execution(key, status):
                 WHERE idempotency_key=%s""", (status, datetime.now(timezone.utc), key.strip()))
     except Exception:
         raise StrategyStoreUnavailable("execution_store_update_failed") from None
+
+
+def list_demo_executions(limit=100):
+    """Return recent ledger entries for authenticated Demo reconciliation review."""
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+        raise ValueError("execution_limit_invalid")
+    try:
+        with _connect() as conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS tradeboot_demo_executions (
+                idempotency_key TEXT PRIMARY KEY, strategy_id TEXT NOT NULL,
+                symbol TEXT NOT NULL, side TEXT NOT NULL, instrument_id BIGINT NOT NULL,
+                amount_usd DOUBLE PRECISION NOT NULL, status TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL)""")
+            rows = conn.execute("""SELECT idempotency_key,strategy_id,symbol,side,instrument_id,
+                amount_usd,status,created_at,updated_at
+                FROM tradeboot_demo_executions ORDER BY updated_at DESC LIMIT %s""", (limit,)).fetchall()
+        return [{
+            "idempotency_key": row[0], "strategy_id": row[1], "symbol": row[2],
+            "side": row[3], "instrument_id": row[4], "amount_usd": float(row[5]),
+            "status": row[6], "created_at": row[7].isoformat(),
+            "updated_at": row[8].isoformat(),
+        } for row in rows]
+    except StrategyStoreUnavailable:
+        raise
+    except Exception:
+        raise StrategyStoreUnavailable("execution_store_unavailable") from None
