@@ -61,8 +61,8 @@ def _ensure_schema(conn):
 
 
 def ensure_bootstrap_admin():
-    username = os.environ.get("TRADEBOOT_ADMIN_USERNAME", "").strip()
-    password = os.environ.get("TRADEBOOT_ADMIN_PASSWORD", "")
+    username = os.environ.get("TRADEBOOT_ADMIN_USERNAME", "admin").strip()
+    password = os.environ.get("TRADEBOOT_ADMIN_PASSWORD") or os.environ.get("TRADEBOOT_STRATEGY_ADMIN_TOKEN", "")
     if not username or not password:
         return False
     if len(username) > 80 or len(password) < 12:
