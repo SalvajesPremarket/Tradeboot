@@ -11,6 +11,7 @@ import json
 import os
 import uuid
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 BASE_URL = "https://public-api.etoro.com/api/v2/"
@@ -165,6 +166,31 @@ def close_demo_position(position_id: int, instrument_id: int) -> dict:
     except (URLError, TimeoutError, OSError, ValueError):
         raise EtoroExecutionError("etoro_close_request_failed") from None
 
+
+def get_demo_order_information(order_id: int) -> dict:
+    """Read status and fills for one eToro Demo order; does not mutate broker state."""
+    if os.environ.get("ETORO_TRADING_MODE", "disabled").strip().lower() != "demo":
+        raise EtoroExecutionError("demo_mode_required")
+    if isinstance(order_id, bool) or not isinstance(order_id, int) or order_id <= 0:
+        raise EtoroExecutionError("invalid_order_id")
+    api_key = os.environ.get("ETORO_API_KEY", "").strip()
+    user_key = os.environ.get("ETORO_DEMO_USER_KEY", "").strip() or os.environ.get("ETORO_USER_KEY", "").strip()
+    if not api_key or not user_key:
+        raise EtoroExecutionError("etoro_credentials_not_configured")
+    url = BASE_URL + "trading/info/demo/orders:lookup?" + urlencode({"orderId": order_id})
+    request = Request(url, headers={"x-api-key": api_key, "x-user-key": user_key,
+        "x-request-id": str(uuid.uuid4()), "Accept": "application/json"}, method="GET")
+    try:
+        with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            raw = response.read(65536).decode("utf-8", errors="replace")
+            data = json.loads(raw) if raw else {}
+            if not isinstance(data, dict):
+                raise EtoroExecutionError("etoro_order_lookup_invalid_response")
+            return {"ok": True, "mode": "demo", "http_status": response.status, "data": data}
+    except HTTPError as exc:
+        raise EtoroExecutionError(f"etoro_order_lookup_http_{exc.code}") from None
+    except (URLError, TimeoutError, OSError, ValueError):
+        raise EtoroExecutionError("etoro_order_lookup_request_failed") from None
 
 def get_demo_portfolio() -> dict:
     """Read current Demo portfolio without enabling order placement."""
