@@ -92,5 +92,13 @@ class DemoScanWorkerTests(unittest.TestCase):
         self.assertNotIn("secret-token-should-not-leak", str(result))
 
 
+    @patch("demo_scan_worker.list_strategies", side_effect=demo_scan_worker.StrategyStoreUnavailable("database-url-secret"))
+    def test_strategy_store_exception_is_sanitized(self, strategies):
+        result = demo_scan_worker.scan_once(["ABC"])
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "strategy_store_unavailable")
+        self.assertNotIn("database-url-secret", str(result))
+
+
 if __name__ == "__main__":
     unittest.main()
