@@ -24,7 +24,15 @@ def _stop(_signum, _frame):
 
 
 def scan_once(symbols):
-    enabled = [item for item in list_strategies() if item.get("enabled")]
+    try:
+        enabled = [item for item in list_strategies() if item.get("enabled")]
+    except StrategyStoreUnavailable:
+        return {
+            "ok": False,
+            "error": "strategy_store_unavailable",
+            "results": [],
+            "orders_submitted": 0,
+        }
     if len(enabled) != 1:
         return {
             "ok": False,
