@@ -237,7 +237,7 @@ $('strategy-form').addEventListener('submit',event=>{
  if(!name||!formula.trim())return;
  if(strategyTypeValue==='python_program'&&validatedProgramText!==formula){$('strategy-validation-status').textContent='Valida primero la sintaxis Python y luego guarda el programa.';return;}
  if(!Number.isFinite(allocationPercent)||allocationPercent<0||allocationPercent>100){$('strategy-validation-status').textContent='El porcentaje debe estar entre 0 y 100.';return;}
- if(editingStrategyId){const item=strategies.find(s=>s.id===editingStrategyId);if(item){item.name=name;item.formula=formula;item.strategyType=strategyTypeValue;item.allocationPercent=allocationPercent}}
+ if(editingStrategyId){const item=strategies.find(s=>s.id===editingStrategyId);if(item){item.name=name;item.formula=formula;item.strategyType=strategyTypeValue;delete item.allocationPercent}}
  else{strategies.push({id:(typeof crypto!=='undefined'&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+'-'+Math.random().toString(36).slice(2),name,formula,strategyType:strategyTypeValue,enabled:false,allocationPercent,createdAt:new Date().toISOString()})}
  try{persistStrategies();renderStrategies();resetStrategyForm()}catch(_){alert('No se pudo guardar en el almacenamiento local de este navegador.')}
 });
@@ -272,9 +272,11 @@ $('strategy-list').addEventListener('click',async event=>{
   if(!Number.isFinite(generalCapital)||generalCapital<0)throw new Error('El capital general guardado no es válido');
   $('strategy-capital').value=String(generalCapital);
   localStorage.setItem('tradeboot.generalCapital.v1',String(generalCapital));
-  const allocationPercent=Number(item.allocationPercent||0);
+  const allocationPercent=Number(usagePercentInput.value);
+  if(!Number.isFinite(allocationPercent)||allocationPercent<0||allocationPercent>100)throw new Error('El porcentaje de uso debe estar entre 0 y 100%.');
+  usagePercent=allocationPercent;
   const strategyBudget=generalCapital*allocationPercent/100;
-  if(strategyBudget<=0)throw new Error('No se puede probar: guarda un capital general mayor que $0 y asigna un porcentaje mayor que 0% a esta estrategia.');
+  if(strategyBudget<=0)throw new Error('No se puede probar: guarda un capital general mayor que $0 y elige un porcentaje de uso mayor que 0%.');
   const payload={strategyName:item.name,formula:item.formula,symbol:'SIM',capital:strategyBudget,candles:historical,daily_candles:daily,ticks:[{price:8.45,timestamp:at(0),day_volume:600000},{price:8.444,timestamp:at(5),day_volume:600000},{price:8.45,timestamp:at(10),day_volume:600000}],context:{prev_close:8,avg_premarket_volume_30d:100000,avg_volume_30d:600000,volume_today:600000,float_shares:10000000,news:[{published_at:new Date(minute.getTime()-600000).toISOString(),headline:'Company reports quarterly earnings'}]}};
   try {
    const response=await fetch('/strategies/simulate-program',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),cache:'no-store'});
@@ -293,19 +295,13 @@ $('strategy-list').addEventListener('click',async event=>{
   if(!cloudMode||!accountUser){strategyEvaluationResults[item.id]='Inicia sesión con una cuenta autorizada y espera a que PostgreSQL se conecte antes de activar o desactivar estrategias.';renderStrategies();return;}
   const nextEnabled=!item.enabled;
   if(nextEnabled){
-   const otherAllocation=strategies.filter(s=>s.id!==item.id&&s.enabled).reduce((sum,s)=>sum+Number(s.allocationPercent||0),0);
-   const requestedAllocation=otherAllocation+Number(item.allocationPercent||0);
-   if(requestedAllocation>100.000001){
-    strategyEvaluationResults[item.id]='No se puede activar: las estrategias activas sumarían '+requestedAllocation.toFixed(2)+'% del capital. Reduce sus porcentajes a un máximo combinado de 100%.';
-    renderStrategies();
-    return;
-   }
+   // El porcentaje de uso es global y no forma parte de la estrategia guardada.
   }
   const prior=item.enabled;item.enabled=nextEnabled;renderStrategies();
   const saved=await persistStrategies();
   if(!saved){item.enabled=prior;renderStrategies();}
  }
- if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;strategyType.value=item.strategyType||'formula';strategyType.dispatchEvent(new Event('change'));strategyAllocation.value=String(item.allocationPercent??10);updateBudgetPreview();$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
+ if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;strategyType.value=item.strategyType||'formula';strategyType.dispatchEvent(new Event('change'));updateBudgetPreview();$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
  if(button.dataset.action==='delete'){if(!confirm('¿Borrar la estrategia «'+item.name+'»?'))return;strategies=strategies.filter(s=>s.id!==item.id);if(editingStrategyId===item.id)resetStrategyForm();persistStrategies();renderStrategies()}
 });
 loadStrategies();renderStrategies();
