@@ -43,6 +43,34 @@ def demo_allocation_cap(general_capital, allocation_percent):
     return float(general_capital) * float(allocation_percent) / 100.0
 
 
+def evaluate_demo_scan_snapshot(strategy, symbol, market):
+    """Evaluate one market snapshot without ever submitting an order."""
+    if not isinstance(strategy, dict) or strategy.get("strategyType") != "formula":
+        return {"ok": False, "symbol": symbol, "error": "formula_strategy_required", "execution": "not_attempted"}
+    if not isinstance(market, dict) or not market.get("ok"):
+        return {"ok": False, "symbol": symbol, "error": "market_context_unavailable", "execution": "not_attempted"}
+    if not market.get("quote_is_usable"):
+        return {
+            "ok": False, "symbol": symbol, "error": "quote_not_usable",
+            "quote_quality_status": market.get("quote_quality_status"),
+            "quote_time": market.get("quote_time"), "execution": "not_attempted",
+        }
+    try:
+        evaluation = evaluate_formula(strategy.get("formula", ""), market.get("market_values", {}))
+    except StrategyFormulaError as exc:
+        return {
+            "ok": False, "symbol": symbol, "error": "strategy_data_unavailable",
+            "detail": str(exc), "execution": "not_attempted",
+        }
+    return {
+        "ok": True, "symbol": symbol, "instrument_id": market.get("instrument_id"),
+        "quote_time": market.get("quote_time"), "quote_age_seconds": market.get("quote_age_seconds"),
+        "quote_quality_status": market.get("quote_quality_status"),
+        "signal_matched": bool(evaluation.get("matched")), "evaluation": evaluation,
+        "execution": "not_attempted",
+    }
+
+
 def _parse_provider_bool(value):
     """Parse provider booleans without treating strings like 'False' as true."""
     if isinstance(value, bool):
@@ -660,7 +688,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        if path not in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market", "/strategies/simulate-momentum", "/engine/demo-evaluate", "/engine/demo-close"):
+        if path not in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market", "/strategies/simulate-momentum", "/engine/demo-scan", "/engine/demo-evaluate", "/engine/demo-close"):
             return self._json(404, {"ok": False, "error": "not_found"})
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -676,6 +704,48 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"ok": False, "error": "invalid_json"})
         if not isinstance(payload, dict):
             return self._json(400, {"ok": False, "error": "json_object_required"})
+        if path == "/engine/demo-scan":
+            if not self._strategy_admin_authorized():
+                return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
+            symbols = payload.get("symbols")
+            if not isinstance(symbols, list) or not 1 <= len(symbols) <= 5:
+                return self._json(400, {"ok": False, "error": "symbols_array_required", "max_symbols": 5})
+            allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_"
+            normalized_symbols = []
+            for item in symbols:
+                if not isinstance(item, str):
+                    return self._json(400, {"ok": False, "error": "invalid_symbol"})
+                symbol = item.strip().upper()
+                if not symbol or len(symbol) > 20 or any(char not in allowed for char in symbol):
+                    return self._json(400, {"ok": False, "error": "invalid_symbol"})
+                if symbol not in normalized_symbols:
+                    normalized_symbols.append(symbol)
+            if len(normalized_symbols) != len(symbols):
+                return self._json(400, {"ok": False, "error": "duplicate_symbols_not_allowed"})
+            try:
+                enabled = [item for item in list_strategies() if item.get("enabled")]
+                if len(enabled) != 1:
+                    return self._json(409, {"ok": False, "error": "exactly_one_enabled_strategy_required"})
+                strategy = enabled[0]
+                if strategy.get("strategyType") != "formula":
+                    return self._json(409, {"ok": False, "error": "python_program_engine_not_supported"})
+                results = []
+                for symbol in normalized_symbols:
+                    status, market = fetch_market_context(symbol)
+                    if status != 200 or not market.get("ok"):
+                        results.append({
+                            "ok": False, "symbol": symbol, "error": "market_context_unavailable",
+                            "market_error": market.get("error"), "execution": "not_attempted",
+                        })
+                        continue
+                    results.append(evaluate_demo_scan_snapshot(strategy, symbol, market))
+                return self._json(200, {
+                    "ok": True, "mode": "scan_only", "strategy": strategy.get("name"),
+                    "results": results, "orders_submitted": 0,
+                    "note": "Read-only signal scan. No order side or amount is inferred and no trade is submitted.",
+                })
+            except StrategyStoreUnavailable as exc:
+                return self._json(503, {"ok": False, "error": str(exc)})
         if path == "/engine/demo-close":
             if not self._strategy_admin_authorized():
                 return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
