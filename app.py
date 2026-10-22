@@ -20,7 +20,7 @@ from strategy_engine import StrategyFormulaError, evaluate_formula, validate_for
 from strategy_program import validate_strategy_source
 from strategy_program_engine import simulate_program
 from strategy_simulation import simulate_momentum
-from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital, _connect
+from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital, get_usage_percent, set_usage_percent, _connect
 
 
 module = Tradeboot()
@@ -841,12 +841,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(503, {"ok": False, "database": "unavailable"})
             except Exception:
                 return self._json(503, {"ok": False, "database": "unavailable"})
-        if path in ("/strategies", "/strategies/capital"):
+        if path in ("/strategies", "/strategies/capital", "/strategies/usage-percent"):
             if not self._strategy_admin_authorized():
                 return self._json(403, {"ok": False, "error": "strategy_editor_access_required"})
             try:
                 if path == "/strategies/capital":
                     return self._json(200, {"ok": True, "capital": get_general_capital()})
+                if path == "/strategies/usage-percent":
+                    return self._json(200, {"ok": True, "percent": get_usage_percent()})
                 return self._json(200, {"ok": True, "strategies": list_strategies()})
             except StrategyStoreUnavailable as exc:
                 return self._json(503, {"ok": False, "error": str(exc)})
@@ -928,7 +930,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(400, {"ok": False, "error": str(exc)})
             except Exception:
                 return self._json(503, {"ok": False, "error": "editor_access_update_failed"})
-        if path not in ("/strategies", "/strategies/capital"):
+        if path not in ("/strategies", "/strategies/capital", "/strategies/usage-percent"):
             return self._json(404, {"ok": False, "error": "not_found"})
         if not self._strategy_admin_authorized():
             return self._json(401, {"ok": False, "error": "strategy_editor_access_required"})
@@ -941,6 +943,11 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("A numeric capital amount is required.")
                 capital = set_general_capital(payload["capital"])
                 return self._json(200, {"ok": True, "capital": capital})
+            if path == "/strategies/usage-percent":
+                if not isinstance(payload, dict) or isinstance(payload.get("percent"), bool) or not isinstance(payload.get("percent"), (int, float)):
+                    raise ValueError("A numeric usage percentage is required.")
+                percent = set_usage_percent(payload["percent"])
+                return self._json(200, {"ok": True, "percent": percent})
             if not isinstance(payload, dict) or not isinstance(payload.get("strategies"), list):
                 return self._json(400, {"ok": False, "error": "strategies_array_required"})
             for item in payload["strategies"]:
