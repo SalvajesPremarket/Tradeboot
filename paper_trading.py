@@ -95,10 +95,17 @@ def get_paper_status():
 def run_cycle():
     started = datetime.now(timezone.utc)
     symbols = list(_SYMBOLS)
-    active = [s for s in list_strategies() if s.get("enabled") and s.get("strategyType", "formula") == "formula"]
+    enabled_strategies = [s for s in list_strategies() if s.get("enabled")]
+    active = [s for s in enabled_strategies if s.get("strategyType", "formula") == "formula"]
+    active_programs = [s for s in enabled_strategies if s.get("strategyType") == "python_program"]
     capital = get_general_capital()
     evaluated = 0
-    skipped = []
+    # The reviewed engines are integrated, but this worker's current eToro adapter
+    # supplies one quote snapshot, not the historical OHLCV and intraminute ticks
+    # these four programs require. Never fabricate bars or signals from snapshots.
+    skipped = [{"strategy_id": s["id"], "strategy_name": s["name"],
+                "reason": "historical_ohlcv_and_intraminute_tick_feed_required"}
+               for s in active_programs]
     for symbol in symbols:
         status, market = fetch_market_context(symbol)
         if status != 200 or not market.get("ok") or not market.get("quote_is_usable"):
@@ -158,8 +165,11 @@ def run_cycle():
                           (strategy["id"],strategy["name"],symbol,price,qty,allocation,price*(1-_STOP_PCT/100),
                            price*(1+_TAKE_PCT/100),started,quote_at))
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
-                      "symbols":symbols,"active_formula_strategies":len(active),"evaluations":evaluated,
-                      "skipped":skipped[:30],"trading_mode":"paper_only","real_orders_enabled":False})
+                      "symbols":symbols,"active_formula_strategies":len(active),
+                      "active_program_strategies":len(active_programs),
+                      "program_engine_status":"waiting_for_historical_ohlcv_and_intraminute_ticks" if active_programs else "idle",
+                      "evaluations":evaluated,"skipped":skipped[:30],
+                      "trading_mode":"paper_only","real_orders_enabled":False})
 
 
 def _loop():
