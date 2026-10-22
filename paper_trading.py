@@ -103,7 +103,14 @@ def run_cycle():
         status, market = fetch_market_context(symbol)
         if status != 200 or not market.get("ok") or not market.get("quote_is_usable"):
             skipped.append({"symbol":symbol,"reason":"quote_unusable","status":status,
-                            "quality":market.get("quote_quality_status")})
+                            "quality":market.get("quote_quality_status"),
+                            "freshness_status":market.get("freshness_status"),
+                            "quote_age_seconds":market.get("quote_age_seconds"),
+                            "max_quote_age_seconds":market.get("max_quote_age_seconds"),
+                            "market_open":market.get("market_open"),
+                            "delayed_quote":market.get("delayed_quote"),
+                            "stage":market.get("stage"),
+                            "error":market.get("error")})
             continue
         values = market.get("market_values") or {}
         price = values.get("price")
