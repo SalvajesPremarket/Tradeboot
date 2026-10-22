@@ -238,6 +238,10 @@ def run_cycle():
                 skipped.append({"symbol": symbol, "reason": "no_completed_minute_candles"})
                 continue
             latest_session = minute_rows[-1]["_stamp"].astimezone(eastern).date()
+            if latest_session != started.astimezone(eastern).date():
+                skipped.append({"symbol": symbol, "reason": "no_candles_for_current_market_date",
+                                "latest_session": latest_session.isoformat()})
+                continue
             session_rows = [row for row in minute_rows if row["_stamp"].astimezone(eastern).date() == latest_session]
             seed_rows = [row for row in minute_rows if row["_stamp"].astimezone(eastern).date() < latest_session]
             # Remove private parsing fields before passing validated OHLCV to the engines.
