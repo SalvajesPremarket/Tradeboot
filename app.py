@@ -808,6 +808,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == "/auth/me":
+            try:
+                from tradeboot_auth import ensure_bootstrap_admin
+                ensure_bootstrap_admin()
+                user = self._current_user()
+                return self._json(200, {"ok": True, "authenticated": bool(user), "user": user})
+            except Exception:
+                return self._json(503, {"ok": False, "error": "account_auth_not_configured", "hint": "Configure DATABASE_URL, TRADEBOOT_ADMIN_USERNAME and TRADEBOOT_ADMIN_PASSWORD in Render."})
+        if path == "/auth/users":
+            if not self._account_admin_authorized():
+                return self._json(403, {"ok": False, "error": "administrator_required"})
+            try:
+                from tradeboot_auth import list_users
+                return self._json(200, {"ok": True, "users": list_users()})
+            except Exception:
+                return self._json(503, {"ok": False, "error": "user_list_unavailable"})
         if path == "/paper-trading/status":
             try:
                 from paper_trading import get_paper_status
@@ -825,7 +841,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(503, {"ok": False, "database": "unavailable"})
         if path in ("/strategies", "/strategies/capital"):
             if not self._strategy_admin_authorized():
-                return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
+                return self._json(403, {"ok": False, "error": "strategy_editor_access_required"})
             try:
                 if path == "/strategies/capital":
                     return self._json(200, {"ok": True, "capital": get_general_capital()})
