@@ -314,6 +314,7 @@ def _build_program_bot(strategy, symbol, history):
     module, class_name, kind = spec
     capital = get_general_capital()
     budget = max(0.0, capital * float(strategy.get("allocationPercent", 0) or 0) / 100.0)
+    blocker = None
     if kind == "momentum":
         bot = getattr(module, class_name)(symbol, module.SIDE)
         current_date = datetime.now(timezone.utc).date().isoformat()
@@ -351,7 +352,7 @@ def _build_program_bot(strategy, symbol, history):
             reasons = list(dict.fromkeys(reason for context in contexts for reason in context.get("reasons", [])))
             blocker = "contexto D/W sin armar: " + "; ".join(reasons[:6])
     return {"bot": bot, "module": module, "kind": kind, "signature": _program_signature(strategy),
-            "strategy": strategy, "symbol": symbol, "initial_blocker": locals().get("blocker")}, None
+            "strategy": strategy, "symbol": symbol, "initial_blocker": blocker}, None
 
 
 
