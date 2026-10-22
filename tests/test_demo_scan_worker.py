@@ -60,6 +60,27 @@ class DemoScanWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "1 to 5"):
             demo_scan_worker.configured_symbols()
 
+    @patch.dict(os.environ, {
+        "DATABASE_URL": "postgresql://example",
+        "ETORO_API_KEY": "public-key",
+        "ETORO_DEMO_USER_KEY": "demo-user-key",
+    }, clear=True)
+    def test_environment_validation_accepts_demo_credentials(self):
+        demo_scan_worker.validate_environment()
+
+    @patch.dict(os.environ, {"DATABASE_URL": "", "ETORO_API_KEY": ""}, clear=True)
+    def test_environment_validation_fails_fast_without_required_secrets(self):
+        with self.assertRaisesRegex(ValueError, "DATABASE_URL.*ETORO_API_KEY"):
+            demo_scan_worker.validate_environment()
+
+    @patch.dict(os.environ, {
+        "DATABASE_URL": "postgresql://example",
+        "ETORO_API_KEY": "public-key",
+        "ETORO_USER_KEY": "user-key",
+    }, clear=True)
+    def test_environment_validation_accepts_legacy_user_key(self):
+        demo_scan_worker.validate_environment()
+
 
 if __name__ == "__main__":
     unittest.main()
