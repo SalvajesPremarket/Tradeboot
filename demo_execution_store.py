@@ -1,4 +1,4 @@
-""""PostgreSQL idempotency ledger for eToro Demo execution requests."""
+"""PostgreSQL idempotency ledger for eToro Demo execution requests."""
 from datetime import datetime, timezone
 from strategy_store import _connect, StrategyStoreUnavailable
 
