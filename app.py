@@ -231,6 +231,41 @@ def market_values_from_rate_row(row):
     return values
 
 
+_FMP_FLOAT_CACHE = {}
+
+def fetch_fmp_float(symbol):
+    """Return verified current float shares from FMP, or None when unavailable."""
+    symbol = str(symbol or "").strip().upper()
+    api_key = os.environ.get("FMP_API_KEY", "").strip()
+    if not symbol or not api_key:
+        return None
+    now = datetime.now(timezone.utc)
+    cached = _FMP_FLOAT_CACHE.get(symbol)
+    if cached and (now - cached["cached_at"]).total_seconds() < (21600 if cached.get("value") else 600):
+        return cached.get("value")
+    try:
+        url = "https://financialmodelingprep.com/stable/shares-float?" + urlencode({"symbol": symbol, "apikey": api_key})
+        request = Request(url, headers={"Accept": "application/json", "User-Agent": "Tradeboot/1.0"})
+        with urlopen(request, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        row = payload[0] if isinstance(payload, list) and payload and isinstance(payload[0], dict) else None
+        if not row or str(row.get("symbol", "")).strip().upper() != symbol:
+            raise ValueError("FMP float response did not match requested symbol")
+        shares = row.get("floatShares")
+        if isinstance(shares, bool) or not isinstance(shares, (int, float)) or not math.isfinite(float(shares)) or float(shares) <= 0:
+            raise ValueError("FMP float shares value is invalid")
+        value = {"floatShares": float(shares), "freeFloat": row.get("freeFloat"),
+                 "outstandingShares": row.get("outstandingShares"), "date": row.get("date"),
+                 "source": "FMP"}
+        _FMP_FLOAT_CACHE[symbol] = {"cached_at": now, "value": value}
+        return value
+    except Exception as exc:
+        # Do not leak the API key or provider response into logs/status.
+        print("FMP float unavailable for " + symbol + ": " + type(exc).__name__, flush=True)
+        _FMP_FLOAT_CACHE[symbol] = {"cached_at": now, "value": None}
+        return None
+
+
 def fetch_market_context(symbol):
     """Fetch one exact eToro instrument quote and its existing freshness annotations."""
     search_status, search_result = etoro_get(
