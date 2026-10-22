@@ -41,10 +41,20 @@ def scan_once(symbols):
             "orders_submitted": 0,
         }
     strategy = enabled[0]
+    if strategy.get("strategyType") == "python_program":
+        return {
+            "ok": False,
+            "error": "python_program_requires_tick_runtime",
+            "strategy": strategy.get("name"),
+            "results": [],
+            "orders_submitted": 0,
+            "runtime_ready": False,
+            "missing_inputs": ["closed_1m_candles", "continuous_ticks", "strategy_context"],
+        }
     if strategy.get("strategyType") != "formula":
         return {
             "ok": False,
-            "error": "formula_strategy_required",
+            "error": "unsupported_strategy_type",
             "results": [],
             "orders_submitted": 0,
         }
