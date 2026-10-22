@@ -104,7 +104,7 @@ def replace_strategies(items):
                     updated_at TIMESTAMPTZ NOT NULL
                 )
             """)
-            conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS allocation_percent DOUBLE PRECISION NOT NULL DEFAULT 10")
+            conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS allocation_percent DOUBLE PRECISION NOT NULL DEFAULT 0")
             conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS strategy_type TEXT NOT NULL DEFAULT 'formula'")
             conn.execute("DELETE FROM tradeboot_strategies")
             if normalized:
