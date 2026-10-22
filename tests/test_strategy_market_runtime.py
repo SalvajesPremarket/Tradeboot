@@ -1,6 +1,7 @@
 import unittest
 
-from strategy_market_runtime import OneMinuteCandleBuilder, parse_market_timestamp
+from strategy_market_runtime import OneMinuteCandleBuilder, PersistentOneMinuteRuntime, parse_market_timestamp
+from market_candle_store import store_closed_candle
 
 
 class OneMinuteCandleBuilderTests(unittest.TestCase):
@@ -35,6 +36,28 @@ class OneMinuteCandleBuilderTests(unittest.TestCase):
     def test_timestamp_must_include_timezone(self):
         with self.assertRaisesRegex(ValueError, "tick_timestamp_timezone_required"):
             parse_market_timestamp("2026-10-21T14:30:00")
+
+
+    def test_persistent_runtime_stores_only_closed_candles(self):
+        stored = []
+        runtime = PersistentOneMinuteRuntime("AAPL", candle_store=lambda candle: stored.append(dict(candle)) or {"stored": True})
+        self.assertIsNone(runtime.on_tick(10.0, "2026-10-21T14:30:01Z"))
+        self.assertEqual(stored, [])
+        result = runtime.on_tick(10.5, "2026-10-21T14:31:01Z")
+        self.assertTrue(result["persistence"]["stored"])
+        self.assertEqual(len(stored), 1)
+        self.assertTrue(stored[0]["complete"])
+        self.assertEqual(stored[0]["close"], 10.0)
+
+    def test_database_store_rejects_open_or_invalid_candles_before_io(self):
+        with self.assertRaisesRegex(ValueError, "closed_candle_required"):
+            store_closed_candle({"symbol": "AAPL", "complete": False})
+        with self.assertRaisesRegex(ValueError, "candle_ohlc_invalid"):
+            store_closed_candle({
+                "symbol": "AAPL", "timestamp": "2026-10-21T14:30:00Z",
+                "open": 10, "high": 9, "low": 8, "close": 10,
+                "ticks": 2, "complete": True,
+            })
 
 
 if __name__ == "__main__":
