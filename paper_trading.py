@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from strategy_store import _connect, list_strategies, get_general_capital
 from strategy_engine import evaluate_formula, StrategyFormulaError
+from strategy_program_engine import simulate_program
 from app import fetch_market_context
 
 _INTERVAL = max(30, int(os.environ.get("PAPER_TRADING_INTERVAL_SECONDS", "60")))
@@ -52,7 +53,20 @@ def _init_tables(conn):
             last_quote_at TIMESTAMPTZ
         )
     """)
+    conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS side TEXT NOT NULL DEFAULT 'LONG'")
     conn.execute("CREATE INDEX IF NOT EXISTS tradeboot_paper_trades_status_idx ON tradeboot_paper_trades(status, strategy_id, symbol)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tradeboot_paper_events (
+            id BIGSERIAL PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            action TEXT NOT NULL,
+            event_at TIMESTAMPTZ NOT NULL,
+            reason TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(strategy_id, symbol, action, event_at)
+        )
+    """)
 
 
 def _state(key, value):
@@ -73,7 +87,7 @@ def get_paper_status():
             rows = conn.execute("SELECT state_key,state_value,updated_at FROM tradeboot_paper_state").fetchall()
             trades = conn.execute("""
                 SELECT id,strategy_id,strategy_name,symbol,status,entry_price,exit_price,quantity,
-                       allocated_usd,stop_price,take_price,pnl_usd,entry_at,exit_at,exit_reason
+                       allocated_usd,stop_price,take_price,pnl_usd,entry_at,exit_at,exit_reason,side
                 FROM tradeboot_paper_trades ORDER BY id DESC LIMIT 50
             """).fetchall()
             counts = conn.execute("""
@@ -87,7 +101,7 @@ def get_paper_status():
                 "trades": [{"id":r[0],"strategy_id":r[1],"strategy_name":r[2],"symbol":r[3],"status":r[4],
                   "entry_price":r[5],"exit_price":r[6],"quantity":r[7],"allocated_usd":r[8],"stop_price":r[9],
                   "take_price":r[10],"pnl_usd":r[11],"entry_at":r[12].isoformat(),"exit_at":r[13].isoformat() if r[13] else None,
-                  "exit_reason":r[14]} for r in trades]}
+                  "exit_reason":r[14],"side":r[15]} for r in trades]}
     except Exception:
         return {"ok": False, "mode": "paper_only", "worker": {"status":"unavailable"}, "error":"paper_storage_unavailable"}
 
@@ -100,12 +114,9 @@ def run_cycle():
     active_programs = [s for s in enabled_strategies if s.get("strategyType") == "python_program"]
     capital = get_general_capital()
     evaluated = 0
-    # The reviewed engines are integrated, but this worker's current eToro adapter
-    # supplies one quote snapshot, not the historical OHLCV and intraminute ticks
-    # these four programs require. Never fabricate bars or signals from snapshots.
-    skipped = [{"strategy_id": s["id"], "strategy_name": s["name"],
-                "reason": "historical_ohlcv_and_intraminute_tick_feed_required"}
-               for s in active_programs]
+    # Formula strategies can use eToro snapshots; the four reviewed Python engines
+    # require historical OHLCV and are fed only by Schwab's read-only price-history API.
+    skipped = []
     for symbol in symbols:
         status, market = fetch_market_context(symbol)
         if status != 200 or not market.get("ok") or not market.get("quote_is_usable"):
@@ -173,10 +184,179 @@ def run_cycle():
                               VALUES (%s,%s,%s,'OPEN',%s,%s,%s,%s,%s,%s,%s)""",
                               (strategy["id"],strategy["name"],symbol,price,qty,remaining_allocation,price*(1-_STOP_PCT/100),
                                price*(1+_TAKE_PCT/100),started,quote_at))
+
+    if active_programs:
+        from schwab_integration import get_price_history
+        from zoneinfo import ZoneInfo
+        eastern = ZoneInfo("America/New_York")
+        now_minute = started.replace(second=0, microsecond=0)
+        for symbol in symbols:
+            minute_status, minute_payload = get_price_history(symbol, daily=False)
+            daily_status, daily_payload = get_price_history(symbol, daily=True)
+            if minute_status != 200 or not minute_payload.get("ok"):
+                skipped.append({"symbol": symbol, "reason": "schwab_minute_history_unavailable",
+                                "status": minute_status, "detail": minute_payload.get("error")})
+                continue
+            if daily_status != 200 or not daily_payload.get("ok"):
+                skipped.append({"symbol": symbol, "reason": "schwab_daily_history_unavailable",
+                                "status": daily_status, "detail": daily_payload.get("error")})
+                continue
+
+            def clean_candle(row, field):
+                if not isinstance(row, dict):
+                    return None
+                try:
+                    raw_time = row.get("datetime")
+                    if isinstance(raw_time, (int, float)):
+                        stamp = datetime.fromtimestamp(float(raw_time) / 1000, timezone.utc)
+                    elif isinstance(raw_time, str):
+                        stamp = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+                        if stamp.tzinfo is None:
+                            stamp = stamp.replace(tzinfo=timezone.utc)
+                    else:
+                        return None
+                    values = {key: float(row[key]) for key in ("open", "high", "low", "close")}
+                    volume = float(row.get("volume", 0))
+                    if (not all(__import__("math").isfinite(v) and v > 0 for v in values.values())
+                        or not __import__("math").isfinite(volume) or volume < 0
+                        or values["low"] > min(values["open"], values["close"])
+                        or values["high"] < max(values["open"], values["close"])
+                        or values["low"] > values["high"]):
+                        return None
+                    if field == "minute" and stamp >= now_minute:
+                        return None  # never act on a still-forming candle
+                    return {"timestamp": stamp.astimezone(timezone.utc).isoformat(),
+                            **values, "volume": volume, "_stamp": stamp}
+                except (KeyError, TypeError, ValueError, OverflowError, OSError):
+                    return None
+
+            minute_rows = [clean_candle(row, "minute") for row in minute_payload.get("candles", [])]
+            daily_rows = [clean_candle(row, "daily") for row in daily_payload.get("candles", [])]
+            minute_rows = sorted([row for row in minute_rows if row], key=lambda x: x["_stamp"])
+            daily_rows = sorted([row for row in daily_rows if row], key=lambda x: x["_stamp"])
+            if not minute_rows:
+                skipped.append({"symbol": symbol, "reason": "no_completed_minute_candles"})
+                continue
+            latest_session = minute_rows[-1]["_stamp"].astimezone(eastern).date()
+            session_rows = [row for row in minute_rows if row["_stamp"].astimezone(eastern).date() == latest_session]
+            seed_rows = [row for row in minute_rows if row["_stamp"].astimezone(eastern).date() < latest_session]
+            # Remove private parsing fields before passing validated OHLCV to the engines.
+            seed_candles = [{k:v for k,v in row.items() if not k.startswith("_")} for row in seed_rows[-4000:]]
+            ticks = []
+            cumulative_volume = 0.0
+            for row in session_rows:
+                cumulative_volume += row["volume"]
+                ticks.append({"price": row["close"], "timestamp": row["timestamp"], "day_volume": cumulative_volume})
+            daily_candles = [{k:v for k,v in row.items() if not k.startswith("_")} for row in daily_rows[-1000:]]
+            if len(daily_candles) < 60:
+                skipped.append({"symbol": symbol, "reason": "insufficient_daily_history",
+                                "daily_candles": len(daily_candles)})
+                continue
+            daily_volumes = [row["volume"] for row in daily_candles[-30:] if row["volume"] >= 0]
+            context = {
+                "prev_close": daily_candles[-2]["close"] if len(daily_candles) >= 2 else None,
+                "avg_volume_30d": (sum(daily_volumes) / len(daily_volumes)) if daily_volumes else None,
+                "volume_today": cumulative_volume,
+                "news": [],
+            }
+            context = {key:value for key,value in context.items() if value is not None}
+
+            for strategy in active_programs:
+                try:
+                    from strategy_program_engine import _REGISTRY
+                    spec = _REGISTRY.get(strategy["name"])
+                    if not spec:
+                        skipped.append({"symbol": symbol, "strategy_id": strategy["id"],
+                                        "reason": "unsupported_reviewed_strategy"})
+                        continue
+                    module, _class_name, kind = spec
+                    payload = {
+                        "strategyName": strategy["name"], "formula": strategy["formula"],
+                        "symbol": symbol, "capital": capital * float(strategy.get("allocationPercent", 10)) / 100,
+                        "candles": seed_candles, "ticks": ticks, "context": context,
+                    }
+                    if kind == "pullback":
+                        payload["daily_candles"] = daily_candles
+                    result = simulate_program(payload)
+                    new_actions = 0
+                    with _connect() as conn:
+                        _init_tables(conn)
+                        with conn.transaction():
+                            for action in result.get("actions", []):
+                                event_at = action.get("event_at")
+                                if not event_at or action.get("action") not in ("ENTER", "EXIT", "MOVE_STOP"):
+                                    continue
+                                try:
+                                    event_time = datetime.fromisoformat(event_at.replace("Z", "+00:00"))
+                                    if event_time.tzinfo is None:
+                                        event_time = event_time.replace(tzinfo=timezone.utc)
+                                except (TypeError, ValueError):
+                                    continue
+                                inserted = conn.execute("""
+                                    INSERT INTO tradeboot_paper_events(strategy_id,symbol,action,event_at,reason)
+                                    VALUES (%s,%s,%s,%s,%s)
+                                    ON CONFLICT(strategy_id,symbol,action,event_at) DO NOTHING
+                                    RETURNING id
+                                """, (strategy["id"], symbol, action["action"], event_time, str(action.get("reason", ""))[:160])).fetchone()
+                                if not inserted:
+                                    continue
+                                new_actions += 1
+                                side = str(action.get("side", "LONG")).upper()
+                                price = action.get("price")
+                                if not isinstance(price, (int, float)) or not __import__("math").isfinite(price) or price <= 0:
+                                    continue
+                                open_row = conn.execute("""
+                                    SELECT id,entry_price,quantity,allocated_usd,stop_price,side
+                                    FROM tradeboot_paper_trades
+                                    WHERE strategy_id=%s AND symbol=%s AND status='OPEN'
+                                    ORDER BY id DESC LIMIT 1 FOR UPDATE
+                                """, (strategy["id"], symbol)).fetchone()
+                                if action["action"] == "ENTER" and not open_row:
+                                    allocation = capital * float(strategy.get("allocationPercent", 10)) / 100
+                                    used = conn.execute("""
+                                        SELECT COALESCE(SUM(allocated_usd),0) FROM tradeboot_paper_trades
+                                        WHERE strategy_id=%s AND status='OPEN'
+                                    """, (strategy["id"],)).fetchone()[0]
+                                    budget = max(0.0, allocation - float(used or 0))
+                                    if budget <= 0:
+                                        continue
+                                    stop = action.get("stop")
+                                    if not isinstance(stop, (int, float)) or stop <= 0:
+                                        stop = price * (1 - _STOP_PCT / 100 if side == "LONG" else 1 + _STOP_PCT / 100)
+                                    take = price * (1 + _TAKE_PCT / 100 if side == "LONG" else 1 - _TAKE_PCT / 100)
+                                    conn.execute("""
+                                        INSERT INTO tradeboot_paper_trades
+                                        (strategy_id,strategy_name,symbol,status,entry_price,quantity,allocated_usd,
+                                         stop_price,take_price,entry_at,last_quote_at,side)
+                                        VALUES (%s,%s,%s,'OPEN',%s,%s,%s,%s,%s,%s,%s,%s)
+                                    """, (strategy["id"],strategy["name"],symbol,price,budget/price,budget,
+                                          stop,take,event_time,event_time,side))
+                                elif action["action"] == "MOVE_STOP" and open_row:
+                                    old_stop = float(open_row[4])
+                                    improves = price > 0 and ((side == "LONG" and isinstance(action.get("stop"), (int,float)) and action["stop"] > old_stop)
+                                                              or (side == "SHORT" and isinstance(action.get("stop"), (int,float)) and action["stop"] < old_stop))
+                                    if improves:
+                                        conn.execute("UPDATE tradeboot_paper_trades SET stop_price=%s,last_quote_at=%s WHERE id=%s",
+                                                     (action["stop"],event_time,open_row[0]))
+                                elif action["action"] == "EXIT" and open_row:
+                                    trade_id, entry, quantity, allocated, old_stop, open_side = open_row
+                                    pnl = ((price - entry) if open_side == "LONG" else (entry - price)) * quantity
+                                    conn.execute("""
+                                        UPDATE tradeboot_paper_trades SET status='CLOSED',exit_price=%s,pnl_usd=%s,
+                                        exit_at=%s,exit_reason=%s,last_quote_at=%s WHERE id=%s
+                                    """, (price,pnl,event_time,str(action.get("reason","strategy_exit"))[:160],event_time,trade_id))
+                    evaluated += 1
+                    if result.get("diagnostics", {}).get("last_reject_reasons"):
+                        skipped.append({"symbol":symbol,"strategy_id":strategy["id"],
+                                        "reason":"strategy_rejected_or_waiting","diagnostics":result["diagnostics"]["last_reject_reasons"]})
+                except Exception as exc:
+                    skipped.append({"symbol": symbol, "strategy_id": strategy["id"],
+                                    "reason": "program_replay_failed", "detail": type(exc).__name__})
+
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
                       "symbols":symbols,"active_formula_strategies":len(active),
                       "active_program_strategies":len(active_programs),
-                      "program_engine_status":"waiting_for_historical_ohlcv_and_intraminute_ticks" if active_programs else "idle",
+                      "program_engine_status":"schwab_historical_candles" if active_programs else "idle",
                       "evaluations":evaluated,"skipped":skipped[:30],
                       "trading_mode":"paper_only","real_orders_enabled":False})
 
