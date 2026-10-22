@@ -206,7 +206,7 @@ def run_cycle():
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
                       "symbols":symbols,"active_formula_strategies":len(active),
                       "active_program_strategies":len(active_programs),
-                      "program_engine_status":"waiting_for_stream" if active_programs else "idle",
+                      "program_engine_status":("live_ticks" if _stream_state.get("status")=="live" else "waiting_for_stream") if active_programs else "idle",
                       "evaluations":evaluated,"matches":matches,"skipped":skipped[:30],
                       "trading_mode":"paper_only","real_orders_enabled":False})
 
@@ -272,21 +272,20 @@ def _history_for(symbol, instrument_id, force=False):
     minute_fetched_at = cached.get("minute_fetched_at", 0) if cached else 0
     daily_fetched_at = cached.get("daily_fetched_at", 0) if cached else 0
     if force or now - minute_fetched_at >= 55 or not minute_rows:
+        minute_fetched_at = now
         status, payload = fetch_historical_candles(instrument_id, "OneMinute", 220)
         if status == 200 and payload.get("candles"):
             minute_rows = payload["candles"]
-            minute_fetched_at = now
     if force or now - daily_fetched_at >= 1800 or not daily_rows:
+        daily_fetched_at = now
         status, payload = fetch_historical_candles(instrument_id, "OneDay", 400)
         if status == 200 and payload.get("candles"):
             daily_rows = payload["candles"]
-            daily_fetched_at = now
-    if minute_rows or daily_rows:
-        cached = {"minute": minute_rows, "daily": daily_rows,
-                  "minute_fetched_at": minute_fetched_at, "daily_fetched_at": daily_fetched_at,
-                  "instrument_id": instrument_id}
-        _history_cache[symbol] = cached
-    return cached or {"minute": [], "daily": [], "instrument_id": instrument_id}
+    cached = {"minute": minute_rows, "daily": daily_rows,
+              "minute_fetched_at": minute_fetched_at, "daily_fetched_at": daily_fetched_at,
+              "instrument_id": instrument_id}
+    _history_cache[symbol] = cached
+    return cached
 
 
 def _program_signature(strategy):
@@ -411,9 +410,9 @@ def _process_stream_tick(tick, active_strategies):
     day_volume = tick.get("day_volume")
     with _connect() as conn:
         _init_tables(conn)
-        conn.execute("""INSERT INTO tradeboot_market_ticks(symbol,instrument_id,price,tick_at,day_volume)
-                        VALUES (%s,%s,%s,%s,%s)""",
-                     (symbol,instrument_id,price,tick_at,day_volume))
+        tick_id = conn.execute("""INSERT INTO tradeboot_market_ticks(symbol,instrument_id,price,tick_at,day_volume)
+                        VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+                     (symbol,instrument_id,price,tick_at,day_volume)).fetchone()[0]
         conn.execute("""DELETE FROM tradeboot_market_ticks WHERE symbol=%s AND id NOT IN
                         (SELECT id FROM tradeboot_market_ticks WHERE symbol=%s ORDER BY tick_at DESC,id DESC LIMIT 5000)""",
                      (symbol,symbol))
@@ -441,8 +440,8 @@ def _process_stream_tick(tick, active_strategies):
             with _connect() as conn:
                 _init_tables(conn)
                 replay = conn.execute("""SELECT price,tick_at,day_volume FROM tradeboot_market_ticks
-                    WHERE symbol=%s AND tick_at >= %s ORDER BY tick_at ASC,id ASC""",
-                    (symbol, datetime.now(timezone.utc).replace(hour=0,minute=0,second=0,microsecond=0))).fetchall()
+                    WHERE symbol=%s AND tick_at >= %s AND id < %s ORDER BY tick_at ASC,id ASC""",
+                    (symbol, datetime.now(timezone.utc).replace(hour=0,minute=0,second=0,microsecond=0), tick_id)).fetchall()
             for old_price, old_at, old_volume in replay:
                 try:
                     entry["bot"].on_tick(float(old_price), old_at, old_volume) if entry["kind"] == "momentum" else entry["bot"].on_tick(float(old_price), old_at)
