@@ -435,6 +435,8 @@ def _process_stream_tick(tick, active_strategies):
                     _stream_state["strategy_blockers"] = {**_stream_state.get("strategy_blockers",{}), strategy_id:error}
                 continue
             entry = built
+            with _STREAM_TICK_LOCK:
+                _stream_state.setdefault("strategy_blockers", {}).pop(strategy_id, None)
             # Rebuild state from recent real stream ticks after a process restart; don't
             # record these replayed actions a second time.
             with _connect() as conn:
@@ -450,6 +452,13 @@ def _process_stream_tick(tick, active_strategies):
             _program_bots[key] = entry
         try:
             actions = entry["bot"].on_tick(price, tick_at, day_volume) if entry["kind"] == "momentum" else entry["bot"].on_tick(price, tick_at)
+            rejects = getattr(entry["bot"], "last_reject", None)
+            if rejects and not actions:
+                with _STREAM_TICK_LOCK:
+                    _stream_state.setdefault("strategy_blockers", {})[strategy_id] = "; ".join(str(x) for x in rejects)[:500]
+            elif actions:
+                with _STREAM_TICK_LOCK:
+                    _stream_state.setdefault("strategy_blockers", {}).pop(strategy_id, None)
             for action in actions:
                 _record_program_action(strategy, symbol, action, price, tick_at)
                 with _STREAM_TICK_LOCK:
