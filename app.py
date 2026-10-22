@@ -1073,6 +1073,29 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(200, {"ok": True, "mode": "scan_only", "cycles": cycles})
                 if os.environ.get("ETORO_TRADING_MODE", "disabled").strip().lower() != "demo":
                     return self._json(409, {"ok": False, "error": "demo_mode_required"})
+                if path == "/engine/demo-order-status":
+                    if os.environ.get("ETORO_TRADING_MODE", "disabled").strip().lower() != "demo":
+                        return self._json(409, {"ok": False, "error": "demo_mode_required"})
+                    query = parse_qs(urlsplit(self.path).query)
+                    try:
+                        order_id = int(query.get("order_id", [""])[0])
+                    except (TypeError, ValueError):
+                        return self._json(400, {"ok": False, "error": "positive_order_id_required"})
+                    try:
+                        lookup = get_demo_order_information(order_id)
+                    except EtoroExecutionError as exc:
+                        return self._json(502, {"ok": False, "error": str(exc)})
+                    data = lookup.get("data", {})
+                    state = data.get("status", {}) if isinstance(data, dict) else {}
+                    name = state.get("name") if isinstance(state, dict) else None
+                    confirmation = "not_verified"
+                    if isinstance(name, str) and name.lower() in ("filled", "executed"):
+                        confirmation = "confirmed_filled"
+                    elif isinstance(name, str) and name.lower() in ("rejected", "failed"):
+                        confirmation = "confirmed_rejected"
+                    return self._json(200, {"ok": True, "mode": "demo", "order_id": order_id,
+                        "broker_status": name, "broker_confirmation": confirmation,
+                        "order_information": data, "read_only": True})
                 portfolio = get_demo_portfolio()
                 executions = list_demo_executions(100)
                 reconciliation = reconcile_demo_snapshot(portfolio, executions)
