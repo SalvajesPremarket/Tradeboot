@@ -114,6 +114,10 @@ def run_cycle():
     active_programs = [s for s in enabled_strategies if s.get("strategyType") == "python_program"]
     capital = get_general_capital()
     evaluated = 0
+    if len(active_programs) > 1:
+        skipped.append({"reason": "multiple_python_strategies_enabled",
+                        "strategy_ids": [item.get("id") for item in active_programs]})
+        active_programs = []
     # Formula strategies can use eToro snapshots; the four reviewed Python engines
     # require historical OHLCV and are fed only by Schwab's read-only price-history API.
     skipped = []
