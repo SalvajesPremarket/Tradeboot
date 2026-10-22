@@ -20,6 +20,7 @@ from strategy_engine import StrategyFormulaError, evaluate_formula, validate_for
 from strategy_program import validate_strategy_source
 from strategy_simulation import simulate_momentum
 from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital
+from demo_execution_store import reserve_demo_execution, finish_demo_execution
 from etoro_execution import EtoroExecutionError, open_market_order, close_demo_position
 
 
@@ -722,11 +723,42 @@ class Handler(BaseHTTPRequestHandler):
                         "ok": True, "mode": "demo", "executed": False, "reason": "signal_not_matched",
                         "strategy": strategy.get("name"), "symbol": symbol, "evaluation": evaluation,
                     })
-                result = open_market_order(market["instrument_id"], float(amount), side.upper() == "LONG")
+                idempotency_key = payload.get("idempotencyKey")
+                if not isinstance(idempotency_key, str) or not idempotency_key.strip() or len(idempotency_key) > 160:
+                    return self._json(400, {"ok": False, "error": "idempotencyKey_required"})
+                reservation = reserve_demo_execution(
+                    idempotency_key, str(strategy.get("id")), symbol, side.upper(),
+                    int(market["instrument_id"]), float(amount),
+                )
+                if not reservation.get("reserved"):
+                    return self._json(409, {
+                        "ok": False, "error": "duplicate_or_uncertain_execution",
+                        "status": reservation.get("status"),
+                        "same_request": reservation.get("same_request", False),
+                        "hint": "Do not retry with a new key until Demo portfolio/order state has been reconciled.",
+                    })
+                try:
+                    result = open_market_order(market["instrument_id"], float(amount), side.upper() == "LONG")
+                except EtoroExecutionError:
+                    # A timeout can leave broker acceptance uncertain. Keep the key reserved.
+                    try:
+                        finish_demo_execution(idempotency_key, "unknown")
+                    except StrategyStoreUnavailable:
+                        pass
+                    raise
+                try:
+                    finish_demo_execution(idempotency_key, "submitted")
+                except StrategyStoreUnavailable:
+                    return self._json(502, {
+                        "ok": False, "error": "execution_result_persistence_failed",
+                        "execution_may_have_been_submitted": True,
+                        "hint": "Reconcile Demo portfolio before any retry.",
+                    })
                 return self._json(200, {
                     "ok": True, "mode": "demo", "executed": True,
                     "strategy": strategy.get("name"), "symbol": symbol, "side": side.upper(),
-                    "evaluation": evaluation, "execution": result,
+                    "idempotencyKey": idempotency_key, "evaluation": evaluation, "execution": result,
+                    "confirmation_required": True,
                 })
             except StrategyStoreUnavailable as exc:
                 return self._json(503, {"ok": False, "error": str(exc)})
