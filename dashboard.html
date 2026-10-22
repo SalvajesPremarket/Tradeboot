@@ -229,7 +229,7 @@ $('strategy-list').addEventListener('click',async event=>{
   if(!cloudMode||!cloudToken){strategyEvaluationResults[item.id]='Conecta primero el almacenamiento compartido para autorizar la prueba del motor.';renderStrategies();return;}
   strategyEvaluationResults[item.id]='Ejecutando prueba sintética del motor…';renderStrategies();
   const now=new Date(),minute=new Date(now);minute.setSeconds(0,0);
-  const historical=Array.from({length:220},(_,i)=>{const p=8+i*.002;return {open:p,high:p+.03,low:p-.03,close:p};});
+  const historical=Array.from({length:220},(_,i)=>{const p=i===218?8.39:i===219?8.41:8.4;return {open:p,high:p+.03,low:p-.03,close:p};});
   const at=(seconds)=>new Date(minute.getTime()+seconds*1000).toISOString();
   const daily=Array.from({length:400},(_,i)=>{const d=new Date(minute.getTime()-(399-i)*86400000);const p=8+i*.002;return {timestamp:d.toISOString(),open:p,high:p+.08,low:p-.08,close:p,volume:600000};});
   const payload={strategyName:item.name,formula:item.formula,symbol:'SIM',capital:10000,candles:historical,daily_candles:daily,ticks:[{price:8.45,timestamp:at(0),day_volume:600000},{price:8.444,timestamp:at(5),day_volume:600000},{price:8.45,timestamp:at(10),day_volume:600000}],context:{prev_close:8,avg_premarket_volume_30d:100000,avg_volume_30d:600000,volume_today:600000,float_shares:10000000,news:[{published_at:new Date(minute.getTime()-600000).toISOString(),headline:'Company reports quarterly earnings'}]}};
