@@ -125,12 +125,9 @@ def run_cycle():
     capital = get_general_capital()
     evaluated = 0
     matches = []
-    # The reviewed engines are integrated, but this worker's current eToro adapter
-    # supplies one quote snapshot, not the historical OHLCV and intraminute ticks
-    # these four programs require. Never fabricate bars or signals from snapshots.
-    skipped = [{"strategy_id": s["id"], "strategy_name": s["name"],
-                "reason": "historical_ohlcv_and_intraminute_tick_feed_required"}
-               for s in active_programs]
+    # Formula strategies use conservative REST quote checks. The reviewed Python
+    # engines run on the independent persistent OHLCV + WebSocket tick pipeline below.
+    skipped = []
     for symbol in symbols:
         status, market = fetch_market_context(symbol)
         if status != 200 or not market.get("ok") or not market.get("quote_is_usable"):
