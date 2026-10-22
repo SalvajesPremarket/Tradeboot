@@ -938,8 +938,16 @@ class Handler(BaseHTTPRequestHandler):
                     except StrategyStoreUnavailable:
                         pass
                     raise
+                provider_data = result.get("data", {}) if isinstance(result, dict) else {}
+                provider_order_id = None
+                if isinstance(provider_data, dict):
+                    for field in ("orderId", "OrderId", "orderID", "OrderID"):
+                        candidate_id = provider_data.get(field)
+                        if isinstance(candidate_id, (str, int)) and not isinstance(candidate_id, bool):
+                            provider_order_id = candidate_id
+                            break
                 try:
-                    finish_demo_execution(idempotency_key, "submitted")
+                    finish_demo_execution(idempotency_key, "submitted", provider_order_id)
                 except StrategyStoreUnavailable:
                     return self._json(502, {
                         "ok": False, "error": "execution_result_persistence_failed",
@@ -948,6 +956,8 @@ class Handler(BaseHTTPRequestHandler):
                     })
                 return self._json(200, {
                     "ok": True, "mode": "demo", "executed": True,
+                    "provider_order_id": provider_order_id,
+                    "broker_confirmation": "not_verified",
                     "strategy": strategy.get("name"), "symbol": symbol, "side": side.upper(),
                     "idempotencyKey": idempotency_key, "evaluation": evaluation, "execution": result,
                     "confirmation_required": True,
