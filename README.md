@@ -5,11 +5,11 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 ## Estado actual
 
 - API HTTP de solo lectura conectada a los endpoints REST de datos de mercado de eToro.
-- Dashboard que actualiza snapshots puntuales de hasta cinco símbolos cada 30 segundos y evalúa las estrategias activadas como señales simuladas.
+- Dashboard que actualiza snapshots puntuales de hasta cinco símbolos cada 30 segundos; el motor paper usa además un WebSocket persistente para procesar ticks intraminuto.
 - Consumidor WebSocket persistente para ticks de mercado, con reconexión automática, almacenamiento de ticks recientes y actualización de P/L simulado.
 - Recuperación de velas históricas OHLCV por REST de eToro (1 minuto y 1 día) para inicializar los cuatro motores Python revisados.
 - Indicadores de antigüedad, estado de mercado y señales de datos retrasados cuando eToro los proporciona.
-- No envía órdenes reales ni ejecuta operaciones. El trading automático permanece deshabilitado.
+- No envía órdenes reales al broker. El ciclo automático de entradas, salidas, stops y P/L de las estrategias revisadas funciona exclusivamente en simulación (paper trading).
 - Las estrategias se guardan localmente en el navegador salvo que se configure el almacenamiento compartido con `TRADEBOOT_STRATEGY_ADMIN_TOKEN` y la base de datos correspondiente.
 - La calidad de cotización no se puede confirmar completamente cuando el proveedor omite metadatos.
 
