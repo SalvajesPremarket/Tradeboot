@@ -78,16 +78,28 @@ def reconcile_demo_snapshot(portfolio_response, executions):
     data = portfolio_response.get("data", portfolio_response)
     client = data.get("clientPortfolio", data) if isinstance(data, dict) else {}
     positions = client.get("positions", []) if isinstance(client, dict) else []
+    # Some eToro responses expose positions at data.positions; others wrap them
+    # in clientPortfolio. Accept either response envelope without guessing fields.
+    if not positions and isinstance(data, dict) and isinstance(data.get("positions"), list):
+        positions = data["positions"]
     if not isinstance(positions, list):
         positions = []
     normalized_positions = []
     for position in positions:
         if not isinstance(position, dict):
             continue
-        instrument = position.get("instrumentId", position.get("InstrumentID", position.get("instrument_id")))
+        instrument = position.get(
+            "instrumentId", position.get("InstrumentId", position.get(
+                "InstrumentID", position.get("instrument_id")
+            ))
+        )
         side = position.get("isBuy", position.get("IsBuy", position.get("is_buy")))
         amount = position.get("amount", position.get("Amount"))
-        position_id = position.get("positionId", position.get("PositionID", position.get("position_id")))
+        position_id = position.get(
+            "positionId", position.get("PositionId", position.get(
+                "PositionID", position.get("position_id")
+            ))
+        )
         if isinstance(instrument, bool) or not isinstance(instrument, int):
             continue
         if not isinstance(side, bool):
