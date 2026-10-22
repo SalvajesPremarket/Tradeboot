@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 from app import evaluate_demo_scan_snapshot, fetch_market_context
 from strategy_store import StrategyStoreUnavailable, list_strategies
+from demo_execution_store import record_demo_scan_cycle
 
 
 _STOP = False
@@ -118,6 +119,13 @@ def run():
         except Exception as exc:
             snapshot = {"ok": False, "error": "scan_cycle_failed", "detail": str(exc)[:160],
                         "results": [], "orders_submitted": 0}
+        try:
+            record_demo_scan_cycle(snapshot.get("strategy") or "unavailable", started, snapshot.get("results", []))
+            snapshot["history_persisted"] = True
+        except Exception as exc:
+            # Keep scanning, but make persistence failure visible in the worker logs.
+            snapshot["history_persisted"] = False
+            snapshot["history_error"] = str(exc)[:160]
         print(json.dumps({"event": "scan_cycle", "started_at": started, **snapshot},
                          separators=(",", ":"), default=str), flush=True)
         deadline = time.monotonic() + interval
