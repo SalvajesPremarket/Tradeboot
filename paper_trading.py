@@ -9,7 +9,7 @@ import threading
 import time
 import traceback
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 from strategy_store import _connect, list_strategies, get_general_capital
@@ -273,6 +273,15 @@ def _history_for(symbol, instrument_id, force=False):
         status, payload = fetch_historical_candles(instrument_id, "OneMinute", 220)
         if status == 200 and payload.get("candles"):
             minute_rows = payload["candles"]
+            # Strategy seed() expects closed 1-minute bars; discard the currently forming candle.
+            try:
+                last_bar_at = datetime.fromisoformat(str(minute_rows[-1]["timestamp"]).replace("Z","+00:00"))
+                if last_bar_at.tzinfo is None:
+                    last_bar_at = last_bar_at.replace(tzinfo=timezone.utc)
+                if last_bar_at >= datetime.now(timezone.utc).replace(second=0,microsecond=0):
+                    minute_rows = minute_rows[:-1]
+            except (KeyError, TypeError, ValueError, IndexError):
+                pass
     if force or now - daily_fetched_at >= 1800 or not daily_rows:
         daily_fetched_at = now
         status, payload = fetch_historical_candles(instrument_id, "OneDay", 400)
@@ -446,10 +455,20 @@ def _process_stream_tick(tick, active_strategies):
                 _stream_state.setdefault("strategy_blockers", {}).pop(strategy_id, None)
             # Rebuild state from recent real stream ticks after a process restart; don't
             # record these replayed actions a second time.
+            minute_rows = history.get("minute", [])
+            replay_after = datetime.now(timezone.utc).replace(hour=0,minute=0,second=0,microsecond=0)
+            if minute_rows:
+                try:
+                    replay_after = datetime.fromisoformat(str(minute_rows[-1]["timestamp"]).replace("Z","+00:00"))
+                    if replay_after.tzinfo is None:
+                        replay_after = replay_after.replace(tzinfo=timezone.utc)
+                    replay_after += timedelta(minutes=1)
+                except (KeyError, TypeError, ValueError):
+                    pass
             with _connect() as conn:
                 replay = conn.execute("""SELECT price,tick_at,day_volume FROM tradeboot_market_ticks
                     WHERE symbol=%s AND tick_at >= %s AND id < %s ORDER BY tick_at ASC,id ASC""",
-                    (symbol, datetime.now(timezone.utc).replace(hour=0,minute=0,second=0,microsecond=0), tick_id)).fetchall()
+                    (symbol, replay_after, tick_id)).fetchall()
             for old_price, old_at, old_volume in replay:
                 try:
                     entry["bot"].on_tick(float(old_price), old_at, old_volume) if entry["kind"] == "momentum" else entry["bot"].on_tick(float(old_price), old_at)
