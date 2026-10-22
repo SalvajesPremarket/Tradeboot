@@ -232,14 +232,24 @@ $('strategy-list').addEventListener('click',async event=>{
   const historical=Array.from({length:220},(_,i)=>{const p=i===218?8.39:i===219?8.41:8.4;return {open:p,high:p+.03,low:p-.03,close:p};});
   const at=(seconds)=>new Date(minute.getTime()+seconds*1000).toISOString();
   const daily=Array.from({length:400},(_,i)=>{const d=new Date(minute.getTime()-(399-i)*86400000);const p=8+i*.002;return {timestamp:d.toISOString(),open:p,high:p+.08,low:p-.08,close:p,volume:600000};});
-  const payload={strategyName:item.name,formula:item.formula,symbol:'SIM',capital:10000,candles:historical,daily_candles:daily,ticks:[{price:8.45,timestamp:at(0),day_volume:600000},{price:8.444,timestamp:at(5),day_volume:600000},{price:8.45,timestamp:at(10),day_volume:600000}],context:{prev_close:8,avg_premarket_volume_30d:100000,avg_volume_30d:600000,volume_today:600000,float_shares:10000000,news:[{published_at:new Date(minute.getTime()-600000).toISOString(),headline:'Company reports quarterly earnings'}]}};
+  const capitalResponse=await fetch('/strategies/capital',{headers:{'X-Strategy-Admin-Token':cloudToken},cache:'no-store'});
+  const capitalData=await capitalResponse.json();
+  if(!capitalResponse.ok||!capitalData.ok)throw new Error(capitalData.detail||capitalData.error||'No se pudo leer el capital guardado en PostgreSQL');
+  generalCapital=Number(capitalData.capital);
+  if(!Number.isFinite(generalCapital)||generalCapital<0)throw new Error('El capital general guardado no es válido');
+  $('strategy-capital').value=String(generalCapital);
+  localStorage.setItem('tradeboot.generalCapital.v1',String(generalCapital));
+  const allocationPercent=Number(item.allocationPercent||0);
+  const strategyBudget=generalCapital*allocationPercent/100;
+  if(strategyBudget<=0)throw new Error('No se puede probar: guarda un capital general mayor que $0 y asigna un porcentaje mayor que 0% a esta estrategia.');
+  const payload={strategyName:item.name,formula:item.formula,symbol:'SIM',capital:strategyBudget,candles:historical,daily_candles:daily,ticks:[{price:8.45,timestamp:at(0),day_volume:600000},{price:8.444,timestamp:at(5),day_volume:600000},{price:8.45,timestamp:at(10),day_volume:600000}],context:{prev_close:8,avg_premarket_volume_30d:100000,avg_volume_30d:600000,volume_today:600000,float_shares:10000000,news:[{published_at:new Date(minute.getTime()-600000).toISOString(),headline:'Company reports quarterly earnings'}]}};
   try {
    const response=await fetch('/strategies/simulate-program',{method:'POST',headers:{'Content-Type':'application/json','X-Strategy-Admin-Token':cloudToken},body:JSON.stringify(payload),cache:'no-store'});
    const data=await response.json();
    if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'Falló la simulación');
    const signals=data.actions.map(a=>a.action+' '+a.side+' '+String(a.price)+(a.stop?' stop '+String(a.stop):'')).join(' | ');
    const armed=data.diagnostics&&data.diagnostics.armed===true?' · contexto armado':'';
-   strategyEvaluationResults[item.id]='Prueba sintética (no mercado real) · '+data.ticks_processed+' ticks · '+(signals||'motor ejecutado, sin señales')+armed+' · sin órdenes reales.';
+   strategyEvaluationResults[item.id]='Prueba sintética (no mercado real) · capital general '+moneyUSD(generalCapital)+' · asignación '+allocationPercent+'% ('+moneyUSD(strategyBudget)+') · '+data.ticks_processed+' ticks · '+(signals||'motor ejecutado, sin señales')+armed+' · sin órdenes reales.';
   } catch(error) {
    strategyEvaluationResults[item.id]='Error en la prueba del motor: '+error.message;
   }
