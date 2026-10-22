@@ -50,6 +50,21 @@ class DemoOrderLookupTests(unittest.TestCase):
                         execution.get_demo_order_information(value)
             urlopen.assert_not_called()
 
+    def test_lookup_is_demo_only(self):
+        os.environ["ETORO_TRADING_MODE"] = "real"
+        with patch.object(execution, "urlopen") as urlopen:
+            with self.assertRaisesRegex(execution.EtoroExecutionError, "demo_mode_required"):
+                execution.get_demo_order_information(42)
+            urlopen.assert_not_called()
+
+    def test_lookup_sanitizes_http_errors(self):
+        from urllib.error import HTTPError
+        with patch.object(execution, "urlopen", side_effect=HTTPError(
+                "https://public-api.etoro.com/api/v2/trading/info/demo/orders:lookup?orderId=42",
+                404, "Not Found", {}, None)):
+            with self.assertRaisesRegex(execution.EtoroExecutionError, "etoro_order_lookup_http_404"):
+                execution.get_demo_order_information(42)
+
 
 if __name__ == "__main__":
     unittest.main()
