@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from tradeboot import Tradeboot
 from strategy_engine import StrategyFormulaError, evaluate_formula, validate_formula
 from strategy_program import validate_strategy_source
+from strategy_program_engine import simulate_program
 from strategy_simulation import simulate_momentum
 from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital, _connect
 
@@ -667,6 +668,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, simulate_momentum(payload))
             except (TypeError, ValueError) as exc:
                 return self._json(400, {"ok": False, "error": "invalid_simulation_request", "detail": str(exc)})
+
+        if path == "/strategies/simulate-program":
+            if not self._strategy_admin_authorized():
+                return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
+            try:
+                return self._json(200, simulate_program(payload))
+            except (TypeError, ValueError) as exc:
+                return self._json(400, {"ok": False, "error": "invalid_program_simulation_request", "detail": str(exc)})
+            except Exception as exc:
+                # Keep internal traces out of the API response; the server log records the type.
+                print(f"Reviewed Python simulation failed: {type(exc).__name__}", flush=True)
+                return self._json(500, {"ok": False, "error": "program_simulation_failed", "detail": type(exc).__name__})
         if not isinstance(payload.get("formula"), str):
             return self._json(400, {"ok": False, "error": "formula_required"})
         if path == "/strategies/validate-program":
