@@ -6,6 +6,28 @@ import app
 from paper_trading import _tick_from_message
 
 
+class FMPFloatTests(unittest.TestCase):
+    @patch.dict("app.os.environ", {"FMP_API_KEY": "test-key"})
+    @patch("app.urlopen")
+    def test_returns_only_matching_valid_fmp_float(self, urlopen_mock):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self):
+                return b'[{"symbol":"AAPL","date":"2026-10-22 12:00:00","floatShares":1234567,"freeFloat":88.5}]'
+        urlopen_mock.return_value = Response()
+        app._FMP_FLOAT_CACHE.clear()
+        result = app.fetch_fmp_float("AAPL")
+        self.assertEqual(result["floatShares"], 1234567.0)
+        self.assertEqual(result["source"], "FMP")
+        urlopen_mock.assert_called_once()
+
+    @patch.dict("app.os.environ", {}, clear=True)
+    def test_missing_fmp_key_does_not_invent_float(self):
+        app._FMP_FLOAT_CACHE.clear()
+        self.assertIsNone(app.fetch_fmp_float("AAPL"))
+
+
 class HistoricalCandleTests(unittest.TestCase):
     @patch("app.etoro_get")
     def test_normalizes_historical_candles_oldest_first(self, get):
