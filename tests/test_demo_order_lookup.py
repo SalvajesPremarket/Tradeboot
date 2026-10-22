@@ -65,6 +65,41 @@ class DemoOrderLookupTests(unittest.TestCase):
             with self.assertRaisesRegex(execution.EtoroExecutionError, "etoro_order_lookup_http_404"):
                 execution.get_demo_order_information(42)
 
+    def test_status_is_confirmed_only_for_matching_order_id(self):
+        self.assertEqual(
+            execution.summarize_demo_order_status(
+                42, {"orderId": 42, "status": {"name": "Filled"}}
+            ),
+            {"broker_status": "Filled", "broker_confirmation": "confirmed_filled"},
+        )
+        self.assertEqual(
+            execution.summarize_demo_order_status(
+                42, {"orderId": 99, "status": {"name": "Filled"}}
+            )["broker_confirmation"],
+            "not_verified",
+        )
+
+    def test_unknown_or_missing_broker_order_id_stays_unverified(self):
+        for payload in (
+            {"status": {"name": "Filled"}},
+            {"orderId": 42, "status": {"name": "Pending"}},
+            {"orderId": 42, "status": {"name": "PartiallyFilled"}},
+            {},
+        ):
+            with self.subTest(payload=payload):
+                self.assertEqual(
+                    execution.summarize_demo_order_status(42, payload)["broker_confirmation"],
+                    "not_verified",
+                )
+
+    def test_matching_rejection_is_classified_without_raw_payload(self):
+        self.assertEqual(
+            execution.summarize_demo_order_status(
+                42, {"OrderID": "42", "status": {"Name": "Rejected"}}
+            ),
+            {"broker_status": "Rejected", "broker_confirmation": "confirmed_rejected"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
