@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from urllib.parse import parse_qs, urlencode, urlsplit
+from http.cookies import SimpleCookie
 
 from tradeboot import Tradeboot
 from strategy_engine import StrategyFormulaError, evaluate_formula, validate_formula
@@ -767,10 +768,29 @@ class Handler(BaseHTTPRequestHandler):
         except StrategyFormulaError as exc:
             return self._json(400, {"ok": False, "error": "invalid_strategy_formula", "detail": str(exc)})
 
+    def _session_token(self):
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+        except Exception:
+            return ""
+        morsel = cookie.get("tradeboot_session")
+        return morsel.value if morsel else ""
+
+    def _current_user(self):
+        try:
+            from tradeboot_auth import current_user
+            return current_user(self._session_token())
+        except Exception:
+            return None
+
     def _strategy_admin_authorized(self):
-        expected = os.environ.get("TRADEBOOT_STRATEGY_ADMIN_TOKEN", "")
-        supplied = self.headers.get("X-Strategy-Admin-Token", "")
-        return bool(expected and supplied and hmac.compare_digest(expected, supplied))
+        user = self._current_user()
+        return bool(user and (user.get("role") == "admin" or user.get("editor_enabled")))
+
+    def _account_admin_authorized(self):
+        user = self._current_user()
+        return bool(user and user.get("role") == "admin")
 
     def _read_json_body(self, max_bytes=262144):
         try:
