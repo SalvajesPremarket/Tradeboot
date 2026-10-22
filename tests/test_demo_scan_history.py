@@ -16,7 +16,7 @@ class DemoScanHistoryTests(unittest.TestCase):
         self.assertEqual(conn.execute.call_count, 3)
         insert_sql = conn.execute.call_args_list[1].args[0]
         self.assertIn("INSERT INTO tradeboot_demo_scan_cycles", insert_sql)
-        self.assertIn('"signal_matched":true', conn.execute.call_args_list[1].args[2])
+        self.assertIn('"signal_matched":true', conn.execute.call_args_list[1].args[1][2])
 
     @patch("demo_execution_store._connect")
     def test_list_recent_cycles(self, connect):
