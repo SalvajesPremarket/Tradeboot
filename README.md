@@ -39,6 +39,7 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 - `demo_scan_worker.py` — proceso continuo de escaneo de solo lectura para ejecutarse como Render Background Worker; usa `TRADEBOOT_SCAN_SYMBOLS` y `TRADEBOOT_SCAN_INTERVAL_SECONDS`.
 - `GET /engine/demo-scan-history?limit=50` — historial persistido de ciclos de escaneo, protegido por `TRADEBOOT_STRATEGY_ADMIN_TOKEN`; acepta límites de 1 a 200.
 - `GET /engine/demo-reconcile` — compara posiciones abiertas Demo con entradas recientes del ledger por instrumento, lado y monto; muestra coincidencias candidatas, ambigüedades y casos para revisión, sin confirmar ejecuciones automáticamente.
+- `GET /engine/demo-order-status?order_id=123` — consulta el estado y los detalles de una orden específica en eToro Demo mediante la API oficial de solo lectura; requiere autenticación administrativa y `ETORO_TRADING_MODE=demo`.
 - `POST /strategies/validate-program` — validar la sintaxis de un programa Python completo sin ejecutarlo.
 - `POST /strategies/simulate-momentum` — probar el motor integrado Momentum Tramos con velas/ticks sintéticos o históricos; requiere `X-Strategy-Admin-Token`, procesa como máximo 5.000 velas y 5.000 ticks, y solo emite señales simuladas.
 
