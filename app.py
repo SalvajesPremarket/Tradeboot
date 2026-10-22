@@ -1081,6 +1081,8 @@ class Handler(BaseHTTPRequestHandler):
                         order_id = int(query.get("order_id", [""])[0])
                     except (TypeError, ValueError):
                         return self._json(400, {"ok": False, "error": "positive_order_id_required"})
+                    if order_id <= 0:
+                        return self._json(400, {"ok": False, "error": "positive_order_id_required"})
                     try:
                         lookup = get_demo_order_information(order_id)
                     except EtoroExecutionError as exc:
