@@ -46,8 +46,16 @@ def demo_allocation_cap(general_capital, allocation_percent):
 
 def evaluate_demo_scan_snapshot(strategy, symbol, market):
     """Evaluate one market snapshot without ever submitting an order."""
+    if isinstance(strategy, dict) and strategy.get("strategyType") == "python_program":
+        return {
+            "ok": False, "symbol": symbol,
+            "error": "python_program_requires_tick_runtime",
+            "runtime_ready": False,
+            "missing_inputs": ["closed_1m_candles", "continuous_ticks", "strategy_context"],
+            "execution": "not_attempted",
+        }
     if not isinstance(strategy, dict) or strategy.get("strategyType") != "formula":
-        return {"ok": False, "symbol": symbol, "error": "formula_strategy_required", "execution": "not_attempted"}
+        return {"ok": False, "symbol": symbol, "error": "unsupported_strategy_type", "execution": "not_attempted"}
     if not isinstance(market, dict) or not market.get("ok"):
         return {"ok": False, "symbol": symbol, "error": "market_context_unavailable", "execution": "not_attempted"}
     if not market.get("quote_is_usable"):
@@ -816,7 +824,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(409, {"ok": False, "error": "exactly_one_enabled_strategy_required"})
                 strategy = enabled[0]
                 if strategy.get("strategyType") != "formula":
-                    return self._json(409, {"ok": False, "error": "python_program_engine_not_supported"})
+                    return self._json(409, {
+                        "ok": False,
+                        "error": "python_program_requires_tick_runtime",
+                        "runtime_ready": False,
+                        "missing_inputs": ["closed_1m_candles", "continuous_ticks", "strategy_context"],
+                        "execution": "not_attempted",
+                    })
                 results = []
                 for symbol in normalized_symbols:
                     status, market = fetch_market_context(symbol)
