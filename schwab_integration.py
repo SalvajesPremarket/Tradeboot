@@ -257,3 +257,52 @@ def get_quotes(symbols):
         return 503, {"ok": False, "error": str(exc)}
     except (URLError, TimeoutError, OSError, UnicodeError, json.JSONDecodeError):
         return 502, {"ok": False, "error": "schwab_market_data_unavailable"}
+
+
+def get_price_history(symbol, *, daily=False):
+    """Read-only Schwab price history: minute bars for replay or daily bars for D/W context."""
+    import re
+    if not isinstance(symbol, str):
+        return 400, {"ok": False, "error": "invalid_symbol"}
+    symbol = symbol.strip().upper()
+    if not symbol or len(symbol) > 20 or not re.fullmatch(r"[A-Z0-9.\\-_]+", symbol):
+        return 400, {"ok": False, "error": "invalid_symbol"}
+    if daily:
+        params = {
+            "symbol": symbol, "periodType": "year", "period": 2,
+            "frequencyType": "daily", "frequency": 1,
+            "needExtendedHoursData": "false",
+        }
+    else:
+        params = {
+            "symbol": symbol, "periodType": "day", "period": 1,
+            "frequencyType": "minute", "frequency": 1,
+            "needExtendedHoursData": "true",
+        }
+    try:
+        access_token = _access_token()
+        request = Request(
+            MARKET_DATA_BASE + "/pricehistory?" + urlencode(params),
+            headers={
+                "Authorization": "Bearer " + access_token,
+                "Accept": "application/json",
+                "User-Agent": "Tradeboot/1.0 (read-only Schwab price-history client)",
+            },
+            method="GET",
+        )
+        with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        candles = payload.get("candles") if isinstance(payload, dict) else None
+        if not isinstance(candles, list):
+            return 502, {"ok": False, "error": "schwab_price_history_response_invalid"}
+        return 200, {
+            "ok": True, "provider": "schwab", "symbol": symbol,
+            "interval": "1day" if daily else "1minute",
+            "candles": candles, "real_orders_enabled": False,
+        }
+    except HTTPError as exc:
+        return 502, {"ok": False, "error": "schwab_price_history_rejected", "upstream_status": exc.code}
+    except ValueError as exc:
+        return 503, {"ok": False, "error": str(exc)}
+    except (URLError, TimeoutError, OSError, UnicodeError, json.JSONDecodeError):
+        return 502, {"ok": False, "error": "schwab_price_history_unavailable"}
