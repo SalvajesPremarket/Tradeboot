@@ -57,16 +57,17 @@
   </div>
 </section>
 
-<section class="panel strategies" id="strategy-manager">
+<section class="panel" id="account-panel"><h2 id="account-title">Iniciar sesión en TradeBoot</h2><p id="account-message" role="status">Inicia sesión para sincronizar estrategias entre dispositivos.</p>
+<form id="account-login-form" class="strategy-form"><div class="field"><label for="account-username">Usuario</label><input id="account-username" autocomplete="username" required maxlength="80"></div><div class="field"><label for="account-password">Contraseña</label><input id="account-password" type="password" autocomplete="current-password" required></div><div class="field full"><button type="submit">Iniciar sesión</button></div></form>
+<button type="button" class="secondary" id="account-logout" hidden>Cerrar sesión</button>
+<form id="account-change-password" class="strategy-form" hidden><div class="field"><label for="account-old-password">Contraseña actual</label><input id="account-old-password" type="password" required></div><div class="field"><label for="account-new-password">Nueva contraseña (mínimo 12 caracteres)</label><input id="account-new-password" type="password" minlength="12" required></div><button type="submit" class="secondary">Cambiar contraseña</button></form>
+<div id="account-admin" hidden><h3>Administrar usuarios</h3><form id="account-create-user" class="strategy-form"><div class="field"><label for="new-username">Nuevo usuario</label><input id="new-username" required maxlength="80"></div><div class="field"><label for="new-password">Contraseña inicial (mínimo 12 caracteres)</label><input id="new-password" type="password" minlength="12" required></div><label><input type="checkbox" id="new-editor-access"> Permitir editor de estrategias</label><button type="submit" class="secondary">Crear usuario</button></form><div id="account-users"></div></div></section>
+<section class="panel strategies" id="strategy-manager" hidden>
   <div class="strategy-head">
     <div><div class="eyebrow">Constructor de estrategias</div><h2>Mis estrategias</h2><p>Crea tantas estrategias como quieras. Ponles nombre, pega tus reglas o fórmula, guárdalas y activa/desactiva cada una por separado.</p></div>
     <span class="pill"><span class="dot"></span><span id="strategy-count">0 estrategias</span></span>
   </div>
-  <div class="form-actions" style="margin-top:16px">
-    <div class="field" style="flex:1;min-width:220px"><label for="strategy-token">Token privado de administración (para sincronizar entre dispositivos)</label><input id="strategy-token" type="password" autocomplete="current-password" placeholder="Configura TRADEBOOT_STRATEGY_ADMIN_TOKEN en Render"></div>
-    <button type="button" class="secondary" id="strategy-connect">Conectar almacenamiento compartido</button>
-    <span id="strategy-cloud-status" class="status-note" role="status" aria-live="polite">Guardado local en este navegador.</span>
-  </div>
+  <div class="form-actions" style="margin-top:16px"><span id="strategy-cloud-status" class="status-note" role="status" aria-live="polite">Inicia sesión para conectar el almacenamiento compartido.</span></div>
   <div class="panel" style="margin-top:18px;background:#0f1929">
     <h3>Capital general para operar (solo configuración)</h3>
     <p>Define el dinero total que autorizas para tus estrategias. Cada estrategia tendrá su propio porcentaje de ese monto.</p>
@@ -101,7 +102,7 @@ let strategies=[];
 let editingStrategyId=null;
 let cloudMode=false;
 let generalCapital=Number(localStorage.getItem('tradeboot.generalCapital.v1')||0);
-let cloudToken=sessionStorage.getItem('tradeboot.strategyAdminToken')||'';
+let accountUser=null;
 const strategyEvaluationResults={};
 const strategyName=$('strategy-name'), strategyFormula=$('strategy-formula');
 const strategyType=$('strategy-type'), strategyAllocation=$('strategy-allocation');
@@ -119,15 +120,16 @@ function updateBudgetPreview(){const pct=Number(strategyAllocation.value);const 
 function loadGeneralCapital(){$('strategy-capital').value=String(generalCapital);updateBudgetPreview();}
 $('strategy-capital').addEventListener('input',()=>{const n=Number($('strategy-capital').value);if(Number.isFinite(n)&&n>=0){generalCapital=n;updateBudgetPreview();}});
 strategyAllocation.addEventListener('input',updateBudgetPreview);
-async function saveGeneralCapital(){const input=$('strategy-capital'),status=$('capital-status'),n=Number(input.value);if(!Number.isFinite(n)||n<0){status.textContent='Introduce un monto igual o mayor que cero.';return;}generalCapital=n;localStorage.setItem('tradeboot.generalCapital.v1',String(n));updateBudgetPreview();if(cloudMode){try{const r=await fetch('/strategies/capital',{method:'PUT',headers:{'Content-Type':'application/json','X-Strategy-Admin-Token':cloudToken},body:JSON.stringify({capital:generalCapital}),cache:'no-store'});const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.detail||d.error||'No se pudo guardar en PostgreSQL');status.textContent='Monto general guardado en PostgreSQL.';}catch(e){status.textContent='Guardado local; error al sincronizar: '+e.message;}}else status.textContent='Guardado en este navegador. Conecta el almacenamiento compartido para sincronizar.';}
+async function saveGeneralCapital(){const input=$('strategy-capital'),status=$('capital-status'),n=Number(input.value);if(!Number.isFinite(n)||n<0){status.textContent='Introduce un monto igual o mayor que cero.';return;}generalCapital=n;localStorage.setItem('tradeboot.generalCapital.v1',String(n));updateBudgetPreview();if(cloudMode){try{const r=await fetch('/strategies/capital',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({capital:generalCapital}),cache:'no-store'});const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.detail||d.error||'No se pudo guardar en PostgreSQL');status.textContent='Monto general guardado en PostgreSQL.';}catch(e){status.textContent='Guardado local; error al sincronizar: '+e.message;}}else status.textContent='Guardado en este navegador. Conecta el almacenamiento compartido para sincronizar.';}
 $('capital-save').addEventListener('click',saveGeneralCapital);
 loadGeneralCapital();
+refreshAccount();
 function loadStrategies(){try{const parsed=JSON.parse(localStorage.getItem(strategyStoreKey)||'[]');strategies=Array.isArray(parsed)?parsed.filter(s=>s&&typeof s.id==='string'&&typeof s.name==='string'&&typeof s.formula==='string'):[]}catch(_){strategies=[]}}
 async function persistStrategies(){
- if(!cloudMode||!cloudToken){$('strategy-cloud-status').textContent='Conecta el almacenamiento compartido antes de cambiar el estado de una estrategia.';return false}
+ if(!cloudMode||!accountUser){$('strategy-cloud-status').textContent='Inicia sesión con una cuenta autorizada antes de cambiar estrategias.';return false}
  const status=$('strategy-cloud-status');
  try{
-  const response=await fetch('/strategies',{method:'PUT',headers:{'Content-Type':'application/json','X-Strategy-Admin-Token':cloudToken},body:JSON.stringify({strategies}),cache:'no-store'});
+  const response=await fetch('/strategies',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({strategies}),cache:'no-store'});
   const data=await response.json();
   if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'No se pudo guardar en el servidor');
   strategies=data.strategies;
@@ -138,7 +140,7 @@ async function persistStrategies(){
  }catch(error){
   status.textContent='Error al sincronizar: '+error.message;
   try{
-   const check=await fetch('/strategies',{headers:{'X-Strategy-Admin-Token':cloudToken},cache:'no-store'});
+   const check=await fetch('/strategies',{credentials:'same-origin',cache:'no-store'});
    const saved=await check.json();
    if(check.ok&&saved.ok){strategies=saved.strategies;localStorage.setItem(strategyStoreKey,JSON.stringify(strategies));renderStrategies();}
   }catch(_){}
@@ -146,25 +148,34 @@ async function persistStrategies(){
  }
 }
 async function connectStrategyStorage(){
- const token=$('strategy-token').value.trim(), status=$('strategy-cloud-status');
- if(!token){status.textContent='Introduce el token privado configurado en Render.';return}
- status.textContent='Conectando…';
- try{
-  const response=await fetch('/strategies',{headers:{'X-Strategy-Admin-Token':token},cache:'no-store'});
-  const data=await response.json();
-  if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'No se pudo conectar; revisa el token y DATABASE_URL en Render.');
-  const local=strategies;
-  cloudMode=true;cloudToken=token;sessionStorage.setItem('tradeboot.strategyAdminToken',token);
-  if(!data.strategies.length&&local.length&&confirm('El servidor está vacío. ¿Quieres copiar tus '+local.length+' estrategias locales al almacenamiento compartido?')){
-   strategies=local;await persistStrategies();
-  }else{
-   strategies=data.strategies;localStorage.setItem(strategyStoreKey,JSON.stringify(strategies));renderStrategies();status.textContent='Conectado · estrategias cargadas del almacenamiento compartido.';
-   try{const cr=await fetch('/strategies/capital',{headers:{'X-Strategy-Admin-Token':token},cache:'no-store'});const cd=await cr.json();if(cr.ok&&cd.ok){generalCapital=Number(cd.capital)||0;$('strategy-capital').value=String(generalCapital);localStorage.setItem('tradeboot.generalCapital.v1',String(generalCapital));updateBudgetPreview();$('capital-status').textContent='Monto general cargado de PostgreSQL.';}}catch(_){}
-  }
- }catch(error){cloudMode=false;status.textContent='No conectado: '+error.message}
+ const status=$('strategy-cloud-status');
+ try{const response=await fetch('/strategies',{credentials:'same-origin',cache:'no-store'}),data=await response.json();if(!response.ok||!data.ok)throw new Error(data.error||'La cuenta no tiene permiso para el editor.');
+ const local=strategies;cloudMode=true;
+ if(!data.strategies.length&&local.length&&accountUser.role==='admin'&&confirm('El servidor está vacío. ¿Quieres copiar tus '+local.length+' estrategias locales al almacenamiento compartido?')){strategies=local;await persistStrategies();}
+ else{strategies=data.strategies;localStorage.setItem(strategyStoreKey,JSON.stringify(strategies));renderStrategies();status.textContent='Conectado · estrategias sincronizadas con PostgreSQL.';
+ const cr=await fetch('/strategies/capital',{credentials:'same-origin',cache:'no-store'}),cd=await cr.json();if(cr.ok&&cd.ok){generalCapital=Number(cd.capital)||0;$('strategy-capital').value=String(generalCapital);updateBudgetPreview();$('capital-status').textContent='Monto general cargado de PostgreSQL.';}}
+ }catch(e){cloudMode=false;status.textContent='No conectado: '+e.message}
 }
-$('strategy-token').value=cloudToken;
-$('strategy-connect').addEventListener('click',connectStrategyStorage);
+async function refreshAccount(){
+ try{const r=await fetch('/auth/me',{credentials:'same-origin',cache:'no-store'}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'Autenticación no disponible');
+ accountUser=d.authenticated?d.user:null;const canEdit=!!(accountUser&&(accountUser.role==='admin'||accountUser.editor_enabled));
+ $('strategy-manager').hidden=!canEdit;$('account-login-form').hidden=!!accountUser;$('account-logout').hidden=!accountUser;$('account-change-password').hidden=!accountUser;$('account-admin').hidden=!(accountUser&&accountUser.role==='admin');
+ $('account-title').textContent=accountUser?'Sesión iniciada: '+accountUser.username:'Iniciar sesión en TradeBoot';
+ $('account-message').textContent=accountUser?(canEdit?'Cuenta autorizada · editor sincronizado con PostgreSQL.':'Cuenta sin permiso de edición; solicita acceso al administrador.'):'Usa tu usuario y contraseña. No necesitas volver a introducir el token privado.';
+ if(accountUser&&canEdit)await connectStrategyStorage();else{cloudMode=false;$('strategy-cloud-status').textContent='Inicia sesión con una cuenta autorizada para sincronizar.';}
+ if(accountUser&&accountUser.role==='admin')await refreshAccountUsers();
+ }catch(e){accountUser=null;$('strategy-manager').hidden=true;$('account-message').textContent='No se pudo comprobar la cuenta: '+e.message}
+}
+async function refreshAccountUsers(){
+ try{const r=await fetch('/auth/users',{credentials:'same-origin',cache:'no-store'}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'Error al listar usuarios');
+ $('account-users').innerHTML=d.users.map(u=>'<p>'+paperEscape(u.username)+' · '+paperEscape(u.role)+' · editor '+(u.editor_enabled?'habilitado':'deshabilitado')+(u.role==='user'?' <button type="button" data-user="'+paperEscape(u.username)+'" data-enabled="'+(!u.editor_enabled)+'">'+(u.editor_enabled?'Deshabilitar':'Habilitar')+' editor</button>':'')+'</p>').join('');
+ $('account-users').querySelectorAll('button[data-user]').forEach(b=>b.addEventListener('click',async()=>{const x=await fetch('/auth/users/editor',{method:'PUT',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:b.dataset.user,editor_enabled:b.dataset.enabled==='true'})});const y=await x.json();if(!x.ok||!y.ok)throw new Error(y.error||'No se pudo cambiar el permiso');await refreshAccountUsers();}));
+ }catch(e){$('account-users').textContent=e.message}
+}
+$('account-login-form').addEventListener('submit',async e=>{e.preventDefault();try{const r=await fetch('/auth/login',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('account-username').value,password:$('account-password').value})}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error==='invalid_credentials'?'Usuario o contraseña incorrectos':d.error||'No se pudo iniciar sesión');$('account-password').value='';await refreshAccount();}catch(e){$('account-message').textContent=e.message}});
+$('account-logout').addEventListener('click',async()=>{await fetch('/auth/logout',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:'{}'});await refreshAccount();});
+$('account-change-password').addEventListener('submit',async e=>{e.preventDefault();try{const r=await fetch('/auth/password',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_password:$('account-old-password').value,new_password:$('account-new-password').value})}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'No se pudo cambiar la contraseña');$('account-message').textContent='Contraseña cambiada. Vuelve a iniciar sesión.';$('account-old-password').value='';$('account-new-password').value='';await refreshAccount();}catch(e){$('account-message').textContent=e.message}});
+$('account-create-user').addEventListener('submit',async e=>{e.preventDefault();try{const r=await fetch('/auth/users',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('new-username').value,password:$('new-password').value,editor_enabled:$('new-editor-access').checked})}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'No se pudo crear usuario');$('new-username').value='';$('new-password').value='';$('new-editor-access').checked=false;$('account-message').textContent='Usuario creado; solicita que cambie la contraseña al ingresar.';await refreshAccountUsers();}catch(e){$('account-message').textContent=e.message}});
 
 function renderStrategies(){
  $('strategy-count').textContent=strategies.length+' estrategia'+(strategies.length===1?'':'s');
@@ -252,7 +263,7 @@ $('strategy-list').addEventListener('click',async event=>{
   const historical=Array.from({length:220},(_,i)=>{const p=i===218?8.39:i===219?8.41:8.4;return {open:p,high:p+.03,low:p-.03,close:p};});
   const at=(seconds)=>new Date(minute.getTime()+seconds*1000).toISOString();
   const daily=Array.from({length:400},(_,i)=>{const d=new Date(minute.getTime()-(399-i)*86400000);const p=8+i*.002;return {timestamp:d.toISOString(),open:p,high:p+.08,low:p-.08,close:p,volume:600000};});
-  const capitalResponse=await fetch('/strategies/capital',{headers:{'X-Strategy-Admin-Token':cloudToken},cache:'no-store'});
+  const capitalResponse=await fetch('/strategies/capital',{credentials:'same-origin',cache:'no-store'});
   const capitalData=await capitalResponse.json();
   if(!capitalResponse.ok||!capitalData.ok)throw new Error(capitalData.detail||capitalData.error||'No se pudo leer el capital guardado en PostgreSQL');
   generalCapital=Number(capitalData.capital);
@@ -264,7 +275,7 @@ $('strategy-list').addEventListener('click',async event=>{
   if(strategyBudget<=0)throw new Error('No se puede probar: guarda un capital general mayor que $0 y asigna un porcentaje mayor que 0% a esta estrategia.');
   const payload={strategyName:item.name,formula:item.formula,symbol:'SIM',capital:strategyBudget,candles:historical,daily_candles:daily,ticks:[{price:8.45,timestamp:at(0),day_volume:600000},{price:8.444,timestamp:at(5),day_volume:600000},{price:8.45,timestamp:at(10),day_volume:600000}],context:{prev_close:8,avg_premarket_volume_30d:100000,avg_volume_30d:600000,volume_today:600000,float_shares:10000000,news:[{published_at:new Date(minute.getTime()-600000).toISOString(),headline:'Company reports quarterly earnings'}]}};
   try {
-   const response=await fetch('/strategies/simulate-program',{method:'POST',headers:{'Content-Type':'application/json','X-Strategy-Admin-Token':cloudToken},body:JSON.stringify(payload),cache:'no-store'});
+   const response=await fetch('/strategies/simulate-program',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),cache:'no-store'});
    const data=await response.json();
    if(!response.ok||!data.ok)throw new Error(data.detail||data.error||'Falló la simulación');
    const signals=data.actions.map(a=>a.action+' '+a.side+' '+String(a.price)+(a.stop?' stop '+String(a.stop):'')).join(' | ');
