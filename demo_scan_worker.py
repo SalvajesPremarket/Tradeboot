@@ -60,7 +60,6 @@ def scan_once(symbols):
                 "ok": False,
                 "symbol": symbol,
                 "error": "scan_item_failed",
-                "detail": str(exc)[:160],
                 "execution": "not_attempted",
             })
     return {
@@ -131,7 +130,7 @@ def run():
         except StrategyStoreUnavailable as exc:
             snapshot = {"ok": False, "error": str(exc), "results": [], "orders_submitted": 0}
         except Exception as exc:
-            snapshot = {"ok": False, "error": "scan_cycle_failed", "detail": str(exc)[:160],
+            snapshot = {"ok": False, "error": "scan_cycle_failed",
                         "results": [], "orders_submitted": 0}
         try:
             record_demo_scan_cycle(snapshot.get("strategy") or "unavailable", started, snapshot.get("results", []))
@@ -139,7 +138,7 @@ def run():
         except Exception as exc:
             # Keep scanning, but make persistence failure visible in the worker logs.
             snapshot["history_persisted"] = False
-            snapshot["history_error"] = str(exc)[:160]
+            snapshot["history_error"] = "scan_history_persistence_failed"
         print(json.dumps({"event": "scan_cycle", "started_at": started, **snapshot},
                          separators=(",", ":"), default=str), flush=True)
         deadline = time.monotonic() + interval
