@@ -312,12 +312,14 @@ def fetch_market_context(symbol):
 
 
 class Handler(BaseHTTPRequestHandler):
-    def _json(self, status, payload, head_only=False):
+    def _json(self, status, payload, head_only=False, extra_headers=None):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for header, value in (extra_headers or {}).items():
+            self.send_header(header, value)
         self.end_headers()
         if not head_only:
             self.wfile.write(body)
@@ -850,12 +852,84 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(503, {"ok": False, "error": str(exc)})
         self._dispatch()
 
+    def do_POST(self):
+        path = urlsplit(self.path).path
+        if path not in ("/auth/login", "/auth/logout", "/auth/password", "/auth/users"):
+            return self._json(404, {"ok": False, "error": "not_found"})
+        payload, error = self._read_json_body(max_bytes=16384)
+        if error:
+            return self._json(error[0], error[1])
+        if not isinstance(payload, dict):
+            return self._json(400, {"ok": False, "error": "json_object_required"})
+        token = self._session_token()
+        if path == "/auth/login":
+            try:
+                from tradeboot_auth import login
+                username, password = payload.get("username"), payload.get("password")
+                if not isinstance(username, str) or not isinstance(password, str):
+                    return self._json(400, {"ok": False, "error": "username_and_password_required"})
+                session = login(username, password)
+                if not session:
+                    return self._json(401, {"ok": False, "error": "invalid_credentials"})
+                cookie = "tradeboot_session=" + session + "; Path=/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax"
+                return self._json(200, {"ok": True}, extra_headers={"Set-Cookie": cookie})
+            except ValueError as exc:
+                return self._json(400, {"ok": False, "error": str(exc)})
+            except Exception:
+                return self._json(503, {"ok": False, "error": "account_auth_unavailable"})
+        if path == "/auth/logout":
+            try:
+                from tradeboot_auth import logout
+                logout(token)
+                return self._json(200, {"ok": True}, extra_headers={"Set-Cookie": "tradeboot_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax"})
+            except Exception:
+                return self._json(503, {"ok": False, "error": "logout_unavailable"})
+        user = self._current_user()
+        if not user:
+            return self._json(401, {"ok": False, "error": "login_required"})
+        if path == "/auth/password":
+            try:
+                from tradeboot_auth import change_password
+                if not change_password(user["username"], payload.get("old_password"), payload.get("new_password")):
+                    return self._json(400, {"ok": False, "error": "current_password_incorrect"})
+                return self._json(200, {"ok": True}, extra_headers={"Set-Cookie": "tradeboot_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax"})
+            except ValueError as exc:
+                return self._json(400, {"ok": False, "error": str(exc)})
+            except Exception:
+                return self._json(503, {"ok": False, "error": "password_change_unavailable"})
+        if not self._account_admin_authorized():
+            return self._json(403, {"ok": False, "error": "administrator_required"})
+        try:
+            from tradeboot_auth import create_user
+            result = create_user(payload.get("username"), payload.get("password"), payload.get("editor_enabled", False))
+            return self._json(201, {"ok": True, "user": result})
+        except ValueError as exc:
+            return self._json(400, {"ok": False, "error": str(exc)})
+        except Exception:
+            return self._json(409, {"ok": False, "error": "user_creation_failed"})
+
     def do_PUT(self):
         path = urlsplit(self.path).path
+        if path == "/auth/users/editor":
+            if not self._account_admin_authorized():
+                return self._json(403, {"ok": False, "error": "administrator_required"})
+            payload, error = self._read_json_body(max_bytes=16384)
+            if error:
+                return self._json(error[0], error[1])
+            try:
+                from tradeboot_auth import set_editor_access
+                if not isinstance(payload, dict):
+                    raise ValueError("json_object_required")
+                result = set_editor_access(payload.get("username"), payload.get("editor_enabled"))
+                return self._json(200, {"ok": True, "user": result})
+            except ValueError as exc:
+                return self._json(400, {"ok": False, "error": str(exc)})
+            except Exception:
+                return self._json(503, {"ok": False, "error": "editor_access_update_failed"})
         if path not in ("/strategies", "/strategies/capital"):
             return self._json(404, {"ok": False, "error": "not_found"})
         if not self._strategy_admin_authorized():
-            return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
+            return self._json(401, {"ok": False, "error": "strategy_editor_access_required"})
         payload, error = self._read_json_body()
         if error:
             return self._json(error[0], error[1])
