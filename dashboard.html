@@ -290,7 +290,7 @@ $('strategy-list').addEventListener('click',async event=>{
   return;
  }
  if(button.dataset.action==='toggle'&&['formula','python_program'].includes(item.strategyType||'formula')){
-  if(!cloudMode||!cloudToken){strategyEvaluationResults[item.id]='Conecta el almacenamiento compartido de PostgreSQL antes de activar o desactivar estrategias.';renderStrategies();return;}
+  if(!cloudMode||!accountUser){strategyEvaluationResults[item.id]='Inicia sesión con una cuenta autorizada y espera a que PostgreSQL se conecte antes de activar o desactivar estrategias.';renderStrategies();return;}
   const nextEnabled=!item.enabled;
   if(nextEnabled){
    const otherAllocation=strategies.filter(s=>s.id!==item.id&&s.enabled).reduce((sum,s)=>sum+Number(s.allocationPercent||0),0);
@@ -308,7 +308,7 @@ $('strategy-list').addEventListener('click',async event=>{
  if(button.dataset.action==='edit'){editingStrategyId=item.id;strategyName.value=item.name;strategyFormula.value=item.formula;strategyType.value=item.strategyType||'formula';strategyType.dispatchEvent(new Event('change'));strategyAllocation.value=String(item.allocationPercent??10);updateBudgetPreview();$('strategy-save').textContent='Guardar cambios';$('strategy-cancel').hidden=false;strategyName.focus();$('strategy-manager').scrollIntoView({behavior:'smooth',block:'start'})}
  if(button.dataset.action==='delete'){if(!confirm('¿Borrar la estrategia «'+item.name+'»?'))return;strategies=strategies.filter(s=>s.id!==item.id);if(editingStrategyId===item.id)resetStrategyForm();persistStrategies();renderStrategies()}
 });
-loadStrategies();renderStrategies();if(cloudToken)connectStrategyStorage();
+loadStrategies();renderStrategies();
 
 const symbols=['AAPL','MSFT','NVDA'];
 const names={AAPL:'Apple Inc.',MSFT:'Microsoft',NVDA:'NVIDIA'};
