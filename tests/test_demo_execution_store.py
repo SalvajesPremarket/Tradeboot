@@ -87,6 +87,33 @@ class DemoExecutionLedgerTests(unittest.TestCase):
         self.assertEqual(update[1][0], "submitted")
         self.assertEqual(update[1][2], "key-1")
 
+    def test_list_executions_rejects_invalid_limit_before_database_access(self):
+        with patch.object(ledger, "_connect") as connect:
+            with self.assertRaisesRegex(ValueError, "execution_limit_invalid"):
+                ledger.list_demo_executions(0)
+            with self.assertRaisesRegex(ValueError, "execution_limit_invalid"):
+                ledger.list_demo_executions(501)
+            connect.assert_not_called()
+
+    def test_list_executions_returns_recent_rows(self):
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        row = ("key-1", "strategy", "AAPL", "LONG", 123, 10.0, "pending", now, now)
+
+        class ListingConnection(FakeConnection):
+            def execute(self, sql, params=None):
+                self.calls.append((sql, params))
+                if "SELECT idempotency_key,strategy_id,symbol,side,instrument_id" in sql:
+                    return FakeCursor([row])
+                return FakeCursor()
+
+        connection = ListingConnection()
+        with patch.object(ledger, "_connect", return_value=connection):
+            result = ledger.list_demo_executions(10)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["idempotency_key"], "key-1")
+        self.assertEqual(result[0]["status"], "pending")
+
 
 if __name__ == "__main__":
     unittest.main()
