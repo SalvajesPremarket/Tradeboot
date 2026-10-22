@@ -678,7 +678,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(status, payload, head_only)
         return self._json(404, {"error": "not_found"}, head_only)
 
-    def do_POST(self):
+    def _do_post_strategy(self):
         path = urlsplit(self.path).path
         if path not in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market", "/strategies/simulate-momentum", "/strategies/simulate-program"):
             return self._json(404, {"ok": False, "error": "not_found"})
@@ -854,6 +854,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
+        if path in ("/strategies/validate", "/strategies/validate-program", "/strategies/evaluate-market", "/strategies/simulate-momentum", "/strategies/simulate-program"):
+            return self._do_post_strategy()
         if path not in ("/auth/login", "/auth/logout", "/auth/password", "/auth/users"):
             return self._json(404, {"ok": False, "error": "not_found"})
         payload, error = self._read_json_body(max_bytes=16384)
