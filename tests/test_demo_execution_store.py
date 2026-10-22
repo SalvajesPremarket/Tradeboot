@@ -88,7 +88,7 @@ class DemoExecutionLedgerTests(unittest.TestCase):
         update = next((sql, params) for sql, params in connection.calls if "UPDATE tradeboot_demo_executions" in sql)
         self.assertIn("status=%s", update[0])
         self.assertEqual(update[1][0], "submitted")
-        self.assertEqual(update[1][2], "key-1")
+        self.assertEqual(update[1][3], "key-1")
 
     def test_list_executions_rejects_invalid_limit_before_database_access(self):
         with patch.object(ledger, "_connect") as connect:
@@ -101,7 +101,7 @@ class DemoExecutionLedgerTests(unittest.TestCase):
     def test_list_executions_returns_recent_rows(self):
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
-        row = ("key-1", "strategy", "AAPL", "LONG", 123, 10.0, "pending", now, now)
+        row = ("key-1", "strategy", "AAPL", "LONG", 123, 10.0, "pending", now, now, None)
 
         class ListingConnection(FakeConnection):
             def execute(self, sql, params=None):
@@ -116,6 +116,8 @@ class DemoExecutionLedgerTests(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["idempotency_key"], "key-1")
         self.assertEqual(result[0]["status"], "pending")
+        self.assertIsNone(result[0]["provider_order_id"])
+        self.assertEqual(result[0]["broker_confirmation"], "not_verified")
 
 
 if __name__ == "__main__":
