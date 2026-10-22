@@ -71,6 +71,80 @@ def evaluate_demo_scan_snapshot(strategy, symbol, market):
     }
 
 
+def reconcile_demo_snapshot(portfolio_response, executions):
+    """Compare ledger entries with current Demo positions without declaring fills."""
+    if not isinstance(portfolio_response, dict) or not isinstance(executions, list):
+        return {"status": "manual_review_required", "items": [], "positions": []}
+    data = portfolio_response.get("data", portfolio_response)
+    client = data.get("clientPortfolio", data) if isinstance(data, dict) else {}
+    positions = client.get("positions", []) if isinstance(client, dict) else []
+    if not isinstance(positions, list):
+        positions = []
+    normalized_positions = []
+    for position in positions:
+        if not isinstance(position, dict):
+            continue
+        instrument = position.get("instrumentId", position.get("InstrumentID", position.get("instrument_id")))
+        side = position.get("isBuy", position.get("IsBuy", position.get("is_buy")))
+        amount = position.get("amount", position.get("Amount"))
+        position_id = position.get("positionId", position.get("PositionID", position.get("position_id")))
+        if isinstance(instrument, bool) or not isinstance(instrument, int):
+            continue
+        if not isinstance(side, bool):
+            continue
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            amount = None
+        normalized_positions.append({
+            "position_id": position_id, "instrument_id": instrument,
+            "is_buy": side, "amount_usd": amount,
+        })
+
+    items = []
+    for execution in executions:
+        if not isinstance(execution, dict):
+            continue
+        instrument = execution.get("instrument_id")
+        side = execution.get("side")
+        amount = execution.get("amount_usd")
+        is_buy = True if side == "buy" else (False if side in ("sell", "sellShort", "short") else None)
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            amount = None
+        candidates = [
+            p for p in normalized_positions
+            if p["instrument_id"] == instrument and p["is_buy"] is is_buy
+            and amount is not None and p["amount_usd"] is not None
+            and abs(p["amount_usd"] - amount) <= 0.01
+        ] if is_buy is not None else []
+        if len(candidates) == 1:
+            status = "candidate_match_manual_confirmation"
+        elif len(candidates) > 1:
+            status = "ambiguous_multiple_positions"
+        else:
+            status = "no_current_position_match_manual_review"
+        items.append({
+            "idempotency_key": execution.get("idempotency_key"),
+            "ledger_status": execution.get("status"),
+            "symbol": execution.get("symbol"),
+            "instrument_id": instrument,
+            "side": side,
+            "amount_usd": amount,
+            "reconciliation_status": status,
+            "candidate_positions": candidates,
+            "automatic_confirmation": False,
+        })
+    return {
+        "status": "manual_review_required",
+        "automatic_confirmation": False,
+        "items": items,
+        "open_positions": normalized_positions,
+        "note": "A current-position match is only a candidate; absence does not prove rejection or closure. Verify broker order/history state before retrying.",
+    }
+
+
 def _parse_provider_bool(value):
     """Parse provider booleans without treating strings like 'False' as true."""
     if isinstance(value, bool):
@@ -978,13 +1052,15 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(409, {"ok": False, "error": "demo_mode_required"})
                 portfolio = get_demo_portfolio()
                 executions = list_demo_executions(100)
+                reconciliation = reconcile_demo_snapshot(portfolio, executions)
                 return self._json(200, {
                     "ok": True, "mode": "demo",
-                    "reconciliation_status": "manual_review_required",
+                    "reconciliation_status": reconciliation["status"],
                     "confirmation_required": True,
                     "portfolio_snapshot": portfolio,
                     "recent_executions": executions,
-                    "hint": "Read-only snapshot only. Do not retry pending/unknown/submitted orders until broker order/position state is matched and verified.",
+                    "reconciliation": reconciliation,
+                    "hint": "Read-only candidate matching only. Never retry pending/unknown/submitted orders until broker order/history state is verified.",
                 })
             except StrategyStoreUnavailable as exc:
                 return self._json(503, {"ok": False, "error": str(exc)})
