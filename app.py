@@ -22,7 +22,7 @@ from strategy_program import validate_strategy_source
 from strategy_simulation import simulate_momentum
 from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital
 from demo_execution_store import reserve_demo_execution, finish_demo_execution, list_demo_executions, list_demo_scan_cycles
-from etoro_execution import EtoroExecutionError, open_market_order, close_demo_position, get_demo_portfolio, get_demo_order_information
+from etoro_execution import EtoroExecutionError, open_market_order, close_demo_position, get_demo_portfolio, get_demo_order_information, summarize_demo_order_status
 
 
 module = Tradeboot()
@@ -1088,16 +1088,9 @@ class Handler(BaseHTTPRequestHandler):
                     except EtoroExecutionError as exc:
                         return self._json(502, {"ok": False, "error": str(exc)})
                     data = lookup.get("data", {})
-                    state = data.get("status", {}) if isinstance(data, dict) else {}
-                    name = state.get("name") if isinstance(state, dict) else None
-                    confirmation = "not_verified"
-                    if isinstance(name, str) and name.lower() in ("filled", "executed"):
-                        confirmation = "confirmed_filled"
-                    elif isinstance(name, str) and name.lower() in ("rejected", "failed"):
-                        confirmation = "confirmed_rejected"
+                    summary = summarize_demo_order_status(order_id, data)
                     return self._json(200, {"ok": True, "mode": "demo", "order_id": order_id,
-                        "broker_status": name, "broker_confirmation": confirmation,
-                        "order_information": data, "read_only": True})
+                        **summary, "read_only": True})
                 portfolio = get_demo_portfolio()
                 executions = list_demo_executions(100)
                 reconciliation = reconcile_demo_snapshot(portfolio, executions)
