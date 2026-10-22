@@ -9,6 +9,7 @@ import os
 import math
 import uuid
 import hmac
+import hashlib
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
@@ -723,9 +724,15 @@ class Handler(BaseHTTPRequestHandler):
                         "ok": True, "mode": "demo", "executed": False, "reason": "signal_not_matched",
                         "strategy": strategy.get("name"), "symbol": symbol, "evaluation": evaluation,
                     })
-                idempotency_key = payload.get("idempotencyKey")
-                if not isinstance(idempotency_key, str) or not idempotency_key.strip() or len(idempotency_key) > 160:
-                    return self._json(400, {"ok": False, "error": "idempotencyKey_required"})
+                # Server-generated daily key prevents clients bypassing deduplication with new request IDs.
+                quote_time = str(market.get("quote_time") or "")
+                if not quote_time:
+                    return self._json(409, {"ok": False, "error": "quote_timestamp_required_for_deduplication"})
+                signal_identity = "|".join([
+                    str(strategy.get("id")), symbol, side.upper(),
+                    str(int(market["instrument_id"])), quote_time[:10],
+                ])
+                idempotency_key = "auto-" + hashlib.sha256(signal_identity.encode("utf-8")).hexdigest()
                 reservation = reserve_demo_execution(
                     idempotency_key, str(strategy.get("id")), symbol, side.upper(),
                     int(market["instrument_id"]), float(amount),
