@@ -90,8 +90,22 @@ def configured_symbols():
     return symbols
 
 
+def validate_environment():
+    """Fail fast rather than run a noisy loop with missing database or provider credentials."""
+    missing = [
+        name for name in ("DATABASE_URL", "ETORO_API_KEY")
+        if not os.environ.get(name, "").strip()
+    ]
+    if not (os.environ.get("ETORO_DEMO_USER_KEY", "").strip()
+            or os.environ.get("ETORO_USER_KEY", "").strip()):
+        missing.append("ETORO_USER_KEY or ETORO_DEMO_USER_KEY")
+    if missing:
+        raise ValueError("missing required environment variables: " + ", ".join(missing))
+
+
 def run():
     global _STOP
+    validate_environment()
     symbols = configured_symbols()
     try:
         interval = int(os.environ.get("TRADEBOOT_SCAN_INTERVAL_SECONDS", "60"))
