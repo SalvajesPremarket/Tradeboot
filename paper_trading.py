@@ -106,7 +106,10 @@ def get_paper_status():
                   "take_price":r[10],"pnl_usd":r[11],"entry_at":r[12].isoformat(),"exit_at":r[13].isoformat() if r[13] else None,
                   "exit_reason":r[14],"last_price":r[15],"side":r[16],
                   "unrealized_pnl_usd":(((float(r[15])-float(r[5])) if r[16] != "SHORT" else (float(r[5])-float(r[15])))*float(r[7]) if r[4]=="OPEN" and r[15] is not None else 0.0)} for r in trades]
+        with _STREAM_TICK_LOCK:
+            stream_status = dict(_stream_state)
         return {"ok": True, "mode": "paper_only", "worker": state.get("worker", {}).get("value", {"status":"starting"}),
+                "stream": stream_status,
                 "open_trades": int(counts[0]), "closed_trades": int(counts[1]), "realized_pnl_usd": float(counts[2]),
                 "unrealized_pnl_usd": sum(t["unrealized_pnl_usd"] for t in trade_items), "trades": trade_items}
     except Exception:
@@ -208,6 +211,367 @@ def run_cycle():
                       "trading_mode":"paper_only","real_orders_enabled":False})
 
 
+
+
+def _parse_tick_timestamp(row, received_at):
+    for key in ("timestamp", "date", "time", "dateTime", "Date", "Timestamp"):
+        value = row.get(key)
+        if value:
+            try:
+                parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed.astimezone(timezone.utc)
+            except (TypeError, ValueError, OverflowError):
+                continue
+    return received_at
+
+
+def _tick_from_message(content, symbol, instrument_id):
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(content, dict):
+        return None
+    row = content
+    for key in ("rate", "Rate", "instrumentRate", "InstrumentRate", "data", "Data"):
+        nested = row.get(key)
+        if isinstance(nested, dict):
+            row = {**row, **nested}
+    values = market_values_from_rate_row(row)
+    price = values.get("price")
+    if price is None and values.get("bid") and values.get("ask"):
+        price = (values["bid"] + values["ask"]) / 2
+    if isinstance(price, bool) or not isinstance(price, (int, float)) or not math.isfinite(price) or price <= 0:
+        return None
+    received = datetime.now(timezone.utc)
+    volume = None
+    for key in ("dayVolume", "DayVolume", "volumeToday", "VolumeToday", "dailyVolume", "DailyVolume"):
+        value = row.get(key)
+        if value is not None:
+            try:
+                parsed = float(value)
+                if math.isfinite(parsed) and parsed >= 0:
+                    volume = parsed
+                    break
+            except (TypeError, ValueError, OverflowError):
+                pass
+    return {"symbol": symbol, "instrument_id": instrument_id, "price": float(price),
+            "timestamp": _parse_tick_timestamp(row, received), "day_volume": volume}
+
+
+def _history_for(symbol, instrument_id, force=False):
+    now = time.monotonic()
+    cached = _history_cache.get(symbol)
+    if cached and not force and now - cached.get("minute_fetched_at", 0) < 55 and now - cached.get("daily_fetched_at", 0) < 1800:
+        return cached
+    minute_rows = cached.get("minute", []) if cached else []
+    daily_rows = cached.get("daily", []) if cached else []
+    minute_fetched_at = cached.get("minute_fetched_at", 0) if cached else 0
+    daily_fetched_at = cached.get("daily_fetched_at", 0) if cached else 0
+    if force or now - minute_fetched_at >= 55 or not minute_rows:
+        status, payload = fetch_historical_candles(instrument_id, "OneMinute", 220)
+        if status == 200 and payload.get("candles"):
+            minute_rows = payload["candles"]
+            minute_fetched_at = now
+    if force or now - daily_fetched_at >= 1800 or not daily_rows:
+        status, payload = fetch_historical_candles(instrument_id, "OneDay", 400)
+        if status == 200 and payload.get("candles"):
+            daily_rows = payload["candles"]
+            daily_fetched_at = now
+    if minute_rows or daily_rows:
+        cached = {"minute": minute_rows, "daily": daily_rows,
+                  "minute_fetched_at": minute_fetched_at, "daily_fetched_at": daily_fetched_at,
+                  "instrument_id": instrument_id}
+        _history_cache[symbol] = cached
+    return cached or {"minute": [], "daily": [], "instrument_id": instrument_id}
+
+
+def _program_signature(strategy):
+    return (strategy.get("name"), strategy.get("formula"), float(strategy.get("allocationPercent", 0) or 0))
+
+
+def _build_program_bot(strategy, symbol, history):
+    from strategy_program_engine import _REGISTRY, is_supported_program
+    name = strategy.get("name")
+    spec = _REGISTRY.get(name)
+    if not spec or not is_supported_program(name, strategy.get("formula", "")):
+        return None, "program_not_in_reviewed_allowlist"
+    minute_rows = history.get("minute", [])
+    daily_rows = history.get("daily", [])
+    if len(minute_rows) < 30:
+        return None, "insufficient_one_minute_ohlcv"
+    if spec[2] == "pullback" and len(daily_rows) < 200:
+        return None, "insufficient_daily_ohlcv_for_ema200"
+    module, class_name, kind = spec
+    capital = get_general_capital()
+    budget = max(0.0, capital * float(strategy.get("allocationPercent", 0) or 0) / 100.0)
+    if kind == "momentum":
+        bot = getattr(module, class_name)(symbol, module.SIDE)
+        volumes = [float(row["volume"]) for row in daily_rows[-31:-1] if row.get("volume") is not None]
+        avg_volume = sum(volumes) / len(volumes) if volumes else None
+        prev_close = daily_rows[-2]["close"] if len(daily_rows) >= 2 else None
+        # Float and news are intentionally not invented. The strategy's own filters will
+        # reject entries until those mandatory data sources are configured.
+        bot.set_context({"prev_close": prev_close, "avg_volume_30d": avg_volume,
+                         "avg_premarket_volume_30d": None, "volume_today": None,
+                         "float_shares": None, "news": []})
+        bot.seed([{k: row[k] for k in ("open", "high", "low", "close")} for row in minute_rows])
+    else:
+        import pandas as pd
+        daily_frame_rows = [row for row in daily_rows if row.get("timestamp") and row.get("volume") is not None]
+        if len(daily_frame_rows) < 200:
+            return None, "daily_ohlcv_volume_missing_or_insufficient"
+        frame = pd.DataFrame([{k: row[k] for k in ("open", "high", "low", "close", "volume")}
+                              for row in daily_frame_rows],
+                             index=pd.DatetimeIndex([row["timestamp"] for row in daily_frame_rows]))
+        frame = frame[~frame.index.duplicated(keep="last")].sort_index()
+        volumes = [float(row["volume"]) for row in daily_frame_rows[-31:-1]]
+        info = {"symbol": symbol, "avg_volume_30d": sum(volumes) / len(volumes) if volumes else None,
+                "float_shares": None}
+        contexts = [module.daily_context(frame, info, "D"),
+                    module.daily_context(module.to_weekly(frame), info, "W")]
+        sizer = module.PositionSizer(capital=budget, daily_pct=100)
+        bot = getattr(module, class_name)(symbol, sizer)
+        bot.seed([{k: row[k] for k in ("open", "high", "low", "close")} for row in minute_rows])
+        bot.set_context(*contexts)
+    return {"bot": bot, "module": module, "kind": kind, "signature": _program_signature(strategy),
+            "strategy": strategy, "symbol": symbol}, None
+
+
+def _record_program_action(strategy, symbol, action, price, tick_at):
+    kind = str(action.get("action", "")).upper()
+    side = str(action.get("side", "LONG")).upper()
+    if side not in ("LONG", "SHORT") or kind not in ("ENTER", "EXIT", "MOVE_STOP"):
+        return
+    capital = get_general_capital()
+    allocation = max(0.0, capital * float(strategy.get("allocationPercent", 0) or 0) / 100.0)
+    with _connect() as conn:
+        _init_tables(conn)
+        with conn.transaction():
+            conn.execute("UPDATE tradeboot_paper_trades SET last_price=%s,last_quote_at=%s WHERE strategy_id=%s AND symbol=%s AND status='OPEN'",
+                         (price, tick_at, strategy["id"], symbol))
+            opened = conn.execute("""SELECT id,entry_price,quantity,stop_price,side FROM tradeboot_paper_trades
+                WHERE strategy_id=%s AND symbol=%s AND status='OPEN' FOR UPDATE""",
+                (strategy["id"], symbol)).fetchone()
+            if kind == "ENTER":
+                if opened:
+                    return
+                used = conn.execute("SELECT COALESCE(SUM(allocated_usd),0) FROM tradeboot_paper_trades WHERE strategy_id=%s AND status='OPEN'",
+                                    (strategy["id"],)).fetchone()[0]
+                remaining = max(0.0, allocation - float(used or 0))
+                if remaining <= 0 or price <= 0:
+                    return
+                requested = action.get("shares")
+                if requested is not None:
+                    try:
+                        quantity = min(max(0.0, float(requested)), math.floor(remaining / price))
+                    except (TypeError, ValueError, OverflowError):
+                        quantity = 0
+                else:
+                    quantity = remaining / price
+                if quantity <= 0:
+                    return
+                stop = action.get("stop")
+                try:
+                    stop = float(stop) if stop is not None else (price * (1-_STOP_PCT/100) if side == "LONG" else price * (1+_STOP_PCT/100))
+                except (TypeError, ValueError):
+                    stop = price * (1-_STOP_PCT/100) if side == "LONG" else price * (1+_STOP_PCT/100)
+                take = price * (1+_TAKE_PCT/100) if side == "LONG" else price * (1-_TAKE_PCT/100)
+                conn.execute("""INSERT INTO tradeboot_paper_trades
+                    (strategy_id,strategy_name,symbol,status,entry_price,quantity,allocated_usd,stop_price,take_price,entry_at,last_quote_at,last_price,side)
+                    VALUES (%s,%s,%s,'OPEN',%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (strategy["id"],strategy["name"],symbol,price,quantity,quantity*price,stop,take,tick_at,tick_at,price,side))
+            elif kind == "MOVE_STOP" and opened:
+                new_stop = action.get("stop")
+                if new_stop is not None:
+                    try:
+                        new_stop = float(new_stop)
+                        current_stop = float(opened[3])
+                        improves = new_stop > current_stop if side == "LONG" else new_stop < current_stop
+                        if improves:
+                            conn.execute("UPDATE tradeboot_paper_trades SET stop_price=%s WHERE id=%s", (new_stop, opened[0]))
+                    except (TypeError, ValueError, OverflowError):
+                        pass
+            elif kind == "EXIT" and opened:
+                trade_id, entry, qty, _stop, trade_side = opened
+                pnl = (price - float(entry)) * float(qty) if trade_side != "SHORT" else (float(entry) - price) * float(qty)
+                conn.execute("""UPDATE tradeboot_paper_trades SET status='CLOSED',exit_price=%s,pnl_usd=%s,
+                    exit_at=%s,exit_reason=%s,last_quote_at=%s,last_price=%s WHERE id=%s""",
+                    (price,pnl,tick_at,str(action.get("reason","strategy_exit"))[:120],tick_at,price,trade_id))
+
+
+def _process_stream_tick(tick, active_strategies):
+    symbol = tick["symbol"]
+    instrument_id = tick["instrument_id"]
+    price = tick["price"]
+    tick_at = tick["timestamp"]
+    day_volume = tick.get("day_volume")
+    with _connect() as conn:
+        _init_tables(conn)
+        conn.execute("""INSERT INTO tradeboot_market_ticks(symbol,instrument_id,price,tick_at,day_volume)
+                        VALUES (%s,%s,%s,%s,%s)""",
+                     (symbol,instrument_id,price,tick_at,day_volume))
+        conn.execute("""DELETE FROM tradeboot_market_ticks WHERE symbol=%s AND id NOT IN
+                        (SELECT id FROM tradeboot_market_ticks WHERE symbol=%s ORDER BY tick_at DESC,id DESC LIMIT 5000)""",
+                     (symbol,symbol))
+        conn.execute("""UPDATE tradeboot_paper_trades SET last_price=%s,last_quote_at=%s
+                        WHERE symbol=%s AND status='OPEN'""", (price,tick_at,symbol))
+    desired = {str(s["id"]): s for s in active_strategies
+               if s.get("enabled") and s.get("strategyType") == "python_program"}
+    for key in list(_program_bots):
+        if key[1] == symbol and (key[0] not in desired or _program_bots[key].get("signature") != _program_signature(desired[key[0]])):
+            _program_bots.pop(key, None)
+    for strategy_id, strategy in desired.items():
+        key = (strategy_id, symbol)
+        entry = _program_bots.get(key)
+        if entry is None:
+            history = _history_for(symbol, instrument_id)
+            built, error = _build_program_bot(strategy, symbol, history)
+            if error:
+                with _STREAM_TICK_LOCK:
+                    _stream_state["last_error"] = strategy.get("name","strategy")+": "+error
+                    _stream_state["strategy_blockers"] = {**_stream_state.get("strategy_blockers",{}), strategy_id:error}
+                continue
+            entry = built
+            # Rebuild state from recent real stream ticks after a process restart; don't
+            # record these replayed actions a second time.
+            with _connect() as conn:
+                _init_tables(conn)
+                replay = conn.execute("""SELECT price,tick_at,day_volume FROM tradeboot_market_ticks
+                    WHERE symbol=%s AND tick_at >= %s ORDER BY tick_at ASC,id ASC""",
+                    (symbol, datetime.now(timezone.utc).replace(hour=0,minute=0,second=0,microsecond=0))).fetchall()
+            for old_price, old_at, old_volume in replay:
+                try:
+                    entry["bot"].on_tick(float(old_price), old_at, old_volume) if entry["kind"] == "momentum" else entry["bot"].on_tick(float(old_price), old_at)
+                except Exception:
+                    pass
+            _program_bots[key] = entry
+        try:
+            actions = entry["bot"].on_tick(price, tick_at, day_volume) if entry["kind"] == "momentum" else entry["bot"].on_tick(price, tick_at)
+            for action in actions:
+                _record_program_action(strategy, symbol, action, price, tick_at)
+                with _STREAM_TICK_LOCK:
+                    recent = _stream_state.setdefault("recent_actions", [])
+                    recent.append({"strategy_id": strategy_id, "strategy_name": strategy["name"], "symbol": symbol,
+                                   "action": action.get("action"), "side": action.get("side"), "price": price,
+                                   "reason": str(action.get("reason", ""))[:160], "at": tick_at.isoformat()})
+                    del recent[:-30]
+        except Exception as exc:
+            with _STREAM_TICK_LOCK:
+                _stream_state["last_error"] = "strategy_tick_error:"+type(exc).__name__
+
+
+def _stream_loop():
+    global _program_bots
+    print("Tradeboot eToro live tick stream starting (simulation only)", flush=True)
+    while True:
+        try:
+            api_key, user_key = os.environ.get("ETORO_API_KEY"), os.environ.get("ETORO_USER_KEY")
+            if not api_key or not user_key:
+                with _STREAM_TICK_LOCK:
+                    _stream_state.update({"status":"missing_credentials","last_error":"ETORO_API_KEY/ETORO_USER_KEY not configured"})
+                _state("market_stream", dict(_stream_state))
+                time.sleep(20)
+                continue
+            resolved = []
+            for symbol in _SYMBOLS:
+                status, market = fetch_market_context(symbol)
+                instrument_id = market.get("instrument_id")
+                if instrument_id:
+                    resolved.append({"symbol":symbol,"instrument_id":int(instrument_id)})
+                    _history_for(symbol, int(instrument_id))
+            if not resolved:
+                raise RuntimeError("instrument_resolution_failed")
+            import websocket
+            stream = websocket.create_connection("wss://ws.etoro.com/ws", timeout=5)
+            try:
+                auth_id = str(uuid.uuid4())
+                stream.send(json.dumps({"id":auth_id,"operation":"Authenticate",
+                                        "data":{"userKey":user_key,"apiKey":api_key}}))
+                authenticated = False
+                deadline = time.monotonic()+8
+                while time.monotonic() < deadline:
+                    raw = stream.recv()
+                    if not raw:
+                        continue
+                    try:
+                        msg = json.loads(raw)
+                    except (ValueError, TypeError):
+                        continue
+                    if isinstance(msg,dict) and msg.get("operation")=="Authenticate" and msg.get("id")==auth_id:
+                        if not msg.get("success"):
+                            raise RuntimeError("websocket_authentication_failed")
+                        authenticated=True
+                        break
+                if not authenticated:
+                    raise RuntimeError("websocket_authentication_timeout")
+                stream.send(json.dumps({"id":str(uuid.uuid4()),"operation":"Subscribe",
+                    "data":{"topics":["instrument:"+str(x["instrument_id"]) for x in resolved],"snapshot":False}}))
+                stream.settimeout(1)
+                with _STREAM_TICK_LOCK:
+                    _stream_state.update({"status":"live","last_error":None,"symbols":[x["symbol"] for x in resolved],
+                                          "instrument_ids":{x["symbol"]:x["instrument_id"] for x in resolved},
+                                          "connected_at":datetime.now(timezone.utc).isoformat()})
+                _state("market_stream", dict(_stream_state))
+                active_strategies = list_strategies()
+                refresh_at = time.monotonic()+5
+                last_status_save = time.monotonic()
+                by_id = {x["instrument_id"]:x["symbol"] for x in resolved}
+                while True:
+                    if time.monotonic() >= refresh_at:
+                        active_strategies = list_strategies()
+                        refresh_at = time.monotonic()+5
+                    try:
+                        raw = stream.recv()
+                    except websocket.WebSocketTimeoutException:
+                        raw = None
+                    if raw:
+                        try:
+                            incoming = json.loads(raw)
+                        except (ValueError, TypeError):
+                            incoming = None
+                        messages = incoming.get("messages",[]) if isinstance(incoming,dict) else []
+                        if isinstance(incoming,dict) and incoming.get("topic"):
+                            messages = [incoming]
+                        for message in messages:
+                            if not isinstance(message,dict):
+                                continue
+                            topic = str(message.get("topic",""))
+                            try:
+                                instrument_id = int(topic.rsplit(":",1)[1])
+                            except (IndexError,ValueError):
+                                continue
+                            symbol = by_id.get(instrument_id)
+                            if not symbol:
+                                continue
+                            tick = _tick_from_message(message.get("content"),symbol,instrument_id)
+                            if not tick:
+                                continue
+                            _process_stream_tick(tick,active_strategies)
+                            with _STREAM_TICK_LOCK:
+                                _stream_state["last_tick_at"] = tick["timestamp"].isoformat()
+                                _stream_state["tick_count"] = int(_stream_state.get("tick_count",0))+1
+                    if time.monotonic()-last_status_save >= 10:
+                        with _STREAM_TICK_LOCK:
+                            status_copy = dict(_stream_state)
+                        _state("market_stream",status_copy)
+                        last_status_save = time.monotonic()
+            finally:
+                stream.close()
+        except Exception as exc:
+            with _STREAM_TICK_LOCK:
+                _stream_state.update({"status":"reconnecting","last_error":type(exc).__name__})
+            try:
+                _state("market_stream",dict(_stream_state))
+            except Exception:
+                pass
+            print("Tradeboot tick stream reconnecting: "+type(exc).__name__,flush=True)
+            time.sleep(5)
+
+
 def _loop():
     print("Tradeboot paper-trading loop entered", flush=True)
     while True:
@@ -226,9 +590,11 @@ def _loop():
 
 
 def start_paper_trading_worker():
-    global _thread
+    global _thread, _stream_thread
     with _lock:
-        if _thread is not None and _thread.is_alive():
-            return
-        _thread = threading.Thread(target=_loop, name="tradeboot-paper-trader", daemon=True)
-        _thread.start()
+        if _thread is None or not _thread.is_alive():
+            _thread = threading.Thread(target=_loop, name="tradeboot-paper-trader", daemon=True)
+            _thread.start()
+        if _stream_thread is None or not _stream_thread.is_alive():
+            _stream_thread = threading.Thread(target=_stream_loop, name="tradeboot-market-stream", daemon=True)
+            _stream_thread.start()
