@@ -21,7 +21,7 @@ from strategy_engine import StrategyFormulaError, evaluate_formula, validate_for
 from strategy_program import validate_strategy_source
 from strategy_simulation import simulate_momentum
 from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital
-from demo_execution_store import reserve_demo_execution, finish_demo_execution, list_demo_executions
+from demo_execution_store import reserve_demo_execution, finish_demo_execution, list_demo_executions, list_demo_scan_cycles
 from etoro_execution import EtoroExecutionError, open_market_order, close_demo_position, get_demo_portfolio
 
 
@@ -956,7 +956,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
-        if path in ("/strategies", "/strategies/capital", "/engine/demo-reconcile"):
+        if path in ("/strategies", "/strategies/capital", "/engine/demo-reconcile", "/engine/demo-scan-history"):
             if not self._strategy_admin_authorized():
                 return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
             try:
@@ -964,6 +964,16 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(200, {"ok": True, "capital": get_general_capital()})
                 if path == "/strategies":
                     return self._json(200, {"ok": True, "strategies": list_strategies()})
+                if path == "/engine/demo-scan-history":
+                    try:
+                        limit = int(parse_qs(urlsplit(self.path).query).get("limit", ["50"])[0])
+                    except (TypeError, ValueError):
+                        return self._json(400, {"ok": False, "error": "invalid_scan_history_limit"})
+                    try:
+                        cycles = list_demo_scan_cycles(limit)
+                    except ValueError:
+                        return self._json(400, {"ok": False, "error": "invalid_scan_history_limit", "min": 1, "max": 200})
+                    return self._json(200, {"ok": True, "mode": "scan_only", "cycles": cycles})
                 if os.environ.get("ETORO_TRADING_MODE", "disabled").strip().lower() != "demo":
                     return self._json(409, {"ok": False, "error": "demo_mode_required"})
                 portfolio = get_demo_portfolio()
