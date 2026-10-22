@@ -822,7 +822,7 @@ class Handler(BaseHTTPRequestHandler):
                     if status != 200 or not market.get("ok"):
                         results.append({
                             "ok": False, "symbol": symbol, "error": "market_context_unavailable",
-                            "market_error": market.get("error"), "execution": "not_attempted",
+                            "execution": "not_attempted",
                         })
                         continue
                     results.append(evaluate_demo_scan_snapshot(strategy, symbol, market))
@@ -832,7 +832,7 @@ class Handler(BaseHTTPRequestHandler):
                     "note": "Read-only signal scan. No order side or amount is inferred and no trade is submitted.",
                 })
             except StrategyStoreUnavailable as exc:
-                return self._json(503, {"ok": False, "error": str(exc)})
+                return self._json(503, {"ok": False, "error": "strategy_store_unavailable"})
         if path == "/engine/demo-close":
             if not self._strategy_admin_authorized():
                 return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
