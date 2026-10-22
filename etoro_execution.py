@@ -167,10 +167,16 @@ def close_demo_position(position_id: int, instrument_id: int) -> dict:
 
 
 def get_demo_portfolio() -> dict:
-    """Read current Demo portfolio; this does not execute trades."""
-    mode, api_key, user_key, _ = _configuration()
+    """Read current Demo portfolio without enabling order placement."""
+    mode = os.environ.get("ETORO_TRADING_MODE", "disabled").strip().lower()
     if mode != "demo":
         raise EtoroExecutionError("demo_mode_required")
+    api_key = os.environ.get("ETORO_API_KEY", "").strip()
+    user_key = os.environ.get("ETORO_DEMO_USER_KEY", "").strip()
+    if not user_key:
+        user_key = os.environ.get("ETORO_USER_KEY", "").strip()
+    if not api_key or not user_key:
+        raise EtoroExecutionError("etoro_credentials_not_configured")
     request = Request(
         BASE_URL.replace("/api/v2/", "/api/v1/") + "trading/info/demo/portfolio",
         headers={"x-api-key": api_key, "x-user-key": user_key,
