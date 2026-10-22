@@ -49,8 +49,7 @@ def _init_tables(conn):
             entry_at TIMESTAMPTZ NOT NULL,
             exit_at TIMESTAMPTZ,
             exit_reason TEXT,
-            last_quote_at TIMESTAMPTZ,
-            UNIQUE (strategy_id, symbol, status) DEFERRABLE INITIALLY IMMEDIATE
+            last_quote_at TIMESTAMPTZ
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS tradeboot_paper_trades_status_idx ON tradeboot_paper_trades(status, strategy_id, symbol)")
