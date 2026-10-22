@@ -3,15 +3,18 @@
 Uses confirmed eToro snapshots and saved formula strategies. Never places broker orders.
 """
 import json
+import math
 import os
 import threading
 import time
 import traceback
+import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 from strategy_store import _connect, list_strategies, get_general_capital
 from strategy_engine import evaluate_formula, StrategyFormulaError
-from app import fetch_market_context
+from app import fetch_market_context, fetch_historical_candles, market_values_from_rate_row
 
 _INTERVAL = max(30, int(os.environ.get("PAPER_TRADING_INTERVAL_SECONDS", "60")))
 _STOP_PCT = max(0.1, min(20.0, float(os.environ.get("PAPER_TRADING_STOP_PCT", "2"))))
@@ -22,6 +25,12 @@ _SYMBOLS = tuple(dict.fromkeys(
 ))
 _lock = threading.Lock()
 _thread = None
+_stream_thread = None
+_program_bots = {}
+_history_cache = {}
+_instrument_cache = {}
+_stream_state = {"status": "starting", "last_tick_at": None, "symbols": list(_SYMBOLS), "tick_count": 0}
+_STREAM_TICK_LOCK = threading.Lock()
 
 
 def _init_tables(conn):
@@ -50,10 +59,18 @@ def _init_tables(conn):
             exit_at TIMESTAMPTZ,
             exit_reason TEXT,
             last_quote_at TIMESTAMPTZ,
-            last_price DOUBLE PRECISION
+            last_price DOUBLE PRECISION,
+            side TEXT NOT NULL DEFAULT 'LONG'
         )
     """)
     conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS last_price DOUBLE PRECISION")
+    conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS side TEXT NOT NULL DEFAULT 'LONG'")
+    conn.execute("""CREATE TABLE IF NOT EXISTS tradeboot_market_ticks (
+        id BIGSERIAL PRIMARY KEY, symbol TEXT NOT NULL, instrument_id BIGINT NOT NULL,
+        price DOUBLE PRECISION NOT NULL, tick_at TIMESTAMPTZ NOT NULL,
+        day_volume DOUBLE PRECISION, received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )""")
+    conn.execute("CREATE INDEX IF NOT EXISTS tradeboot_market_ticks_symbol_time_idx ON tradeboot_market_ticks(symbol, tick_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS tradeboot_paper_trades_status_idx ON tradeboot_paper_trades(status, strategy_id, symbol)")
 
 
@@ -75,7 +92,7 @@ def get_paper_status():
             rows = conn.execute("SELECT state_key,state_value,updated_at FROM tradeboot_paper_state").fetchall()
             trades = conn.execute("""
                 SELECT id,strategy_id,strategy_name,symbol,status,entry_price,exit_price,quantity,
-                       allocated_usd,stop_price,take_price,pnl_usd,entry_at,exit_at,exit_reason,last_price
+                       allocated_usd,stop_price,take_price,pnl_usd,entry_at,exit_at,exit_reason,last_price,side
                 FROM tradeboot_paper_trades ORDER BY id DESC LIMIT 50
             """).fetchall()
             counts = conn.execute("""
@@ -87,8 +104,8 @@ def get_paper_status():
         trade_items = [{"id":r[0],"strategy_id":r[1],"strategy_name":r[2],"symbol":r[3],"status":r[4],
                   "entry_price":r[5],"exit_price":r[6],"quantity":r[7],"allocated_usd":r[8],"stop_price":r[9],
                   "take_price":r[10],"pnl_usd":r[11],"entry_at":r[12].isoformat(),"exit_at":r[13].isoformat() if r[13] else None,
-                  "exit_reason":r[14],"last_price":r[15],
-                  "unrealized_pnl_usd":((float(r[15])-float(r[5]))*float(r[7]) if r[4]=="OPEN" and r[15] is not None else 0.0)} for r in trades]
+                  "exit_reason":r[14],"last_price":r[15],"side":r[16],
+                  "unrealized_pnl_usd":(((float(r[15])-float(r[5])) if r[16] != "SHORT" else (float(r[5])-float(r[15])))*float(r[7]) if r[4]=="OPEN" and r[15] is not None else 0.0)} for r in trades]
         return {"ok": True, "mode": "paper_only", "worker": state.get("worker", {}).get("value", {"status":"starting"}),
                 "open_trades": int(counts[0]), "closed_trades": int(counts[1]), "realized_pnl_usd": float(counts[2]),
                 "unrealized_pnl_usd": sum(t["unrealized_pnl_usd"] for t in trade_items), "trades": trade_items}
@@ -186,7 +203,7 @@ def run_cycle():
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
                       "symbols":symbols,"active_formula_strategies":len(active),
                       "active_program_strategies":len(active_programs),
-                      "program_engine_status":"waiting_for_historical_ohlcv_and_intraminute_ticks" if active_programs else "idle",
+                      "program_engine_status":"waiting_for_stream" if active_programs else "idle",
                       "evaluations":evaluated,"matches":matches,"skipped":skipped[:30],
                       "trading_mode":"paper_only","real_orders_enabled":False})
 
