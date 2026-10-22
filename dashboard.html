@@ -232,7 +232,15 @@ $('strategy-list').addEventListener('click',async event=>{
  }
  if(button.dataset.action==='toggle'&&(item.strategyType||'formula')==='formula'){
   const nextEnabled=!item.enabled;
-  if(nextEnabled)strategies.forEach(s=>{s.enabled=false});
+  if(nextEnabled){
+   const otherAllocation=strategies.filter(s=>s.id!==item.id&&s.enabled&&(s.strategyType||'formula')==='formula').reduce((sum,s)=>sum+Number(s.allocationPercent||0),0);
+   const requestedAllocation=otherAllocation+Number(item.allocationPercent||0);
+   if(requestedAllocation>100.000001){
+    strategyEvaluationResults[item.id]='No se puede activar: las estrategias activas sumarían '+requestedAllocation.toFixed(2)+'% del capital. Reduce sus porcentajes a un máximo combinado de 100%.';
+    renderStrategies();
+    return;
+   }
+  }
   item.enabled=nextEnabled;
   persistStrategies();renderStrategies();
  }
