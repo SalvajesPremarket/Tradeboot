@@ -265,7 +265,7 @@ def get_price_history(symbol, *, daily=False):
     if not isinstance(symbol, str):
         return 400, {"ok": False, "error": "invalid_symbol"}
     symbol = symbol.strip().upper()
-    if not symbol or len(symbol) > 20 or not re.fullmatch(r"[A-Z0-9.\\-_]+", symbol):
+    if not symbol or len(symbol) > 20 or not re.fullmatch(r"[A-Z0-9._-]+", symbol):
         return 400, {"ok": False, "error": "invalid_symbol"}
     if daily:
         params = {
