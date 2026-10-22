@@ -743,6 +743,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == "/paper-trading/status":
+            try:
+                from paper_trading import get_paper_status
+                return self._json(200, get_paper_status())
+            except Exception:
+                return self._json(503, {"ok": False, "mode": "paper_only", "worker": {"status": "unavailable"}})
         if path == "/health/database":
             try:
                 with _connect() as conn:
@@ -810,5 +816,11 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    try:
+        from paper_trading import start_paper_trading_worker
+        start_paper_trading_worker()
+        print("Tradeboot paper-trading worker started (simulation only; real orders disabled)")
+    except Exception as exc:
+        print(f"Tradeboot paper-trading worker failed to start: {type(exc).__name__}")
     print(f"Tradeboot read-only API listening on port {port}")
     server.serve_forever()
