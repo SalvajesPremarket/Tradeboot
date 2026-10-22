@@ -5,7 +5,7 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 ## Estado actual
 
 - API HTTP de solo lectura conectada a los endpoints REST de datos de mercado de eToro.
-- Dashboard que actualiza snapshots puntuales de hasta cinco símbolos cada 30 segundos y evalúa las estrategias activadas como señales simuladas.
+- Dashboard que actualiza snapshots puntuales de hasta cinco símbolos cada 30 segundos, evalúa fórmulas y muestra el historial persistente de paper trading.
 - Endpoint de diagnóstico WebSocket que autentica, solicita snapshots y cierra la conexión; todavía no es un consumidor continuo de streaming.
 - Indicadores de antigüedad, estado de mercado y señales de datos retrasados cuando eToro los proporciona.
 - No envía órdenes reales ni ejecuta operaciones. El trading automático permanece deshabilitado.
@@ -26,6 +26,8 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 - `GET /schwab/callback` valida `state`, intercambia el código y guarda tokens cifrados en PostgreSQL.
 - `GET /schwab/status` informa el estado sin mostrar secretos.
 - `GET /schwab/quotes?symbols=AAPL,MSFT` consulta cotizaciones de Market Data API; no envía órdenes.
+- El motor paper consulta historial Schwab de velas de 1 minuto y velas diarias completas para los cuatro motores revisados. Solo procesa velas de minuto cerradas y nunca inventa datos ausentes.
+- Solo se permite activar una de las cuatro estrategias Python a la vez. Las señales, stops, entradas, salidas y P/L se guardan en PostgreSQL y se muestran en el panel Paper trading.
 - La clave de cifrado `SCHWAB_TOKEN_ENCRYPTION_KEY` debe ser una clave Fernet válida. El token cifrado persistido permite guardar las rotaciones del refresh token sin depender de editar variables en cada renovación.
 - La aplicación debe estar aprobada por Schwab y tener permisos de Market Data antes de que OAuth y las cotizaciones puedan funcionar.
 
