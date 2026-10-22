@@ -309,9 +309,12 @@ def _build_program_bot(strategy, symbol, history):
     budget = max(0.0, capital * float(strategy.get("allocationPercent", 0) or 0) / 100.0)
     if kind == "momentum":
         bot = getattr(module, class_name)(symbol, module.SIDE)
-        volumes = [float(row["volume"]) for row in daily_rows[-31:-1] if row.get("volume") is not None]
+        current_date = datetime.now(timezone.utc).date().isoformat()
+        latest_is_today = bool(daily_rows and str(daily_rows[-1].get("timestamp",""))[:10] == current_date)
+        completed_daily = daily_rows[:-1] if latest_is_today else daily_rows
+        volumes = [float(row["volume"]) for row in completed_daily[-30:] if row.get("volume") is not None]
         avg_volume = sum(volumes) / len(volumes) if volumes else None
-        prev_close = daily_rows[-2]["close"] if len(daily_rows) >= 2 else None
+        prev_close = completed_daily[-1]["close"] if completed_daily else None
         # Float and news are intentionally not invented. The strategy's own filters will
         # reject entries until those mandatory data sources are configured.
         bot.set_context({"prev_close": prev_close, "avg_volume_30d": avg_volume,
@@ -408,6 +411,15 @@ def _process_stream_tick(tick, active_strategies):
     price = tick["price"]
     tick_at = tick["timestamp"]
     day_volume = tick.get("day_volume")
+    history = _history_cache.get(symbol) or {}
+    daily_rows = history.get("daily", [])
+    if day_volume is None and daily_rows:
+        latest_daily = daily_rows[-1]
+        if str(latest_daily.get("timestamp",""))[:10] == tick_at.date().isoformat() and latest_daily.get("volume") is not None:
+            try:
+                day_volume = float(latest_daily["volume"])
+            except (TypeError, ValueError, OverflowError):
+                day_volume = None
     with _connect() as conn:
         _init_tables(conn)
         tick_id = conn.execute("""INSERT INTO tradeboot_market_ticks(symbol,instrument_id,price,tick_at,day_volume)
@@ -522,6 +534,9 @@ def _stream_loop():
                 with _STREAM_TICK_LOCK:
                     _stream_state.update({"status":"live","last_error":None,"symbols":[x["symbol"] for x in resolved],
                                           "instrument_ids":{x["symbol"]:x["instrument_id"] for x in resolved},
+                                          "history_counts":{x["symbol"]:{"one_minute":len((_history_cache.get(x["symbol"]) or {}).get("minute",[])),
+                                                                       "daily":len((_history_cache.get(x["symbol"]) or {}).get("daily",[]))}
+                                                           for x in resolved},
                                           "connected_at":datetime.now(timezone.utc).isoformat()})
                 _state("market_stream", dict(_stream_state))
                 active_strategies = list_strategies()
