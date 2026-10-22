@@ -128,7 +128,7 @@ def run():
         try:
             snapshot = scan_once(symbols)
         except StrategyStoreUnavailable as exc:
-            snapshot = {"ok": False, "error": str(exc), "results": [], "orders_submitted": 0}
+            snapshot = {"ok": False, "error": "strategy_store_unavailable", "results": [], "orders_submitted": 0}
         except Exception as exc:
             snapshot = {"ok": False, "error": "scan_cycle_failed",
                         "results": [], "orders_submitted": 0}
