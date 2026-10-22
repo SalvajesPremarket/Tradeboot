@@ -70,3 +70,62 @@ def list_demo_executions(limit=100):
         raise
     except Exception:
         raise StrategyStoreUnavailable("execution_store_unavailable") from None
+
+
+def record_demo_scan_cycle(strategy_name, started_at, results):
+    """Persist a bounded, read-only scanner cycle for authenticated review."""
+    import json
+    if not isinstance(strategy_name, str) or len(strategy_name) > 200:
+        raise ValueError("scan_strategy_name_invalid")
+    if not isinstance(started_at, str) or not started_at.strip() or len(started_at) > 80:
+        raise ValueError("scan_started_at_invalid")
+    if not isinstance(results, list) or len(results) > 5:
+        raise ValueError("scan_results_invalid")
+    serialized = json.dumps(results, separators=(",", ":"), default=str)
+    if len(serialized) > 50000:
+        raise ValueError("scan_results_too_large")
+    try:
+        with _connect() as conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS tradeboot_demo_scan_cycles (
+                id BIGSERIAL PRIMARY KEY,
+                strategy_name TEXT NOT NULL,
+                started_at TIMESTAMPTZ NOT NULL,
+                results JSONB NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+            conn.execute("""INSERT INTO tradeboot_demo_scan_cycles
+                (strategy_name, started_at, results)
+                VALUES (%s, %s, %s::jsonb)""",
+                (strategy_name, started_at, serialized))
+            # Keep storage bounded while preserving the newest 2,000 scan cycles.
+            conn.execute("""DELETE FROM tradeboot_demo_scan_cycles
+                WHERE id NOT IN (SELECT id FROM tradeboot_demo_scan_cycles
+                                 ORDER BY id DESC LIMIT 2000)""")
+    except StrategyStoreUnavailable:
+        raise
+    except Exception:
+        raise StrategyStoreUnavailable("scan_history_persistence_failed") from None
+
+
+def list_demo_scan_cycles(limit=50):
+    """Return recent read-only scan cycles, newest first."""
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+        raise ValueError("scan_history_limit_invalid")
+    try:
+        with _connect() as conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS tradeboot_demo_scan_cycles (
+                id BIGSERIAL PRIMARY KEY,
+                strategy_name TEXT NOT NULL,
+                started_at TIMESTAMPTZ NOT NULL,
+                results JSONB NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())""")
+            rows = conn.execute("""SELECT id, strategy_name, started_at, results, created_at
+                FROM tradeboot_demo_scan_cycles ORDER BY id DESC LIMIT %s""", (limit,)).fetchall()
+        return [{
+            "id": row[0], "strategy": row[1], "started_at": row[2].isoformat(),
+            "results": row[3] if isinstance(row[3], (dict, list)) else json.loads(row[3]),
+            "created_at": row[4].isoformat(),
+        } for row in rows]
+    except StrategyStoreUnavailable:
+        raise
+    except Exception:
+        raise StrategyStoreUnavailable("scan_history_read_failed") from None
