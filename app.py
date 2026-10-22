@@ -20,6 +20,7 @@ from tradeboot import Tradeboot
 from strategy_engine import StrategyFormulaError, evaluate_formula, validate_formula
 from strategy_program import validate_strategy_source
 from strategy_simulation import simulate_momentum
+from strategy_program_engine import evaluate_strategy_replay
 from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital
 from demo_execution_store import reserve_demo_execution, finish_demo_execution, list_demo_executions, list_demo_scan_cycles
 from etoro_execution import EtoroExecutionError, open_market_order, close_demo_position, get_demo_portfolio, get_demo_order_information, summarize_demo_order_status
@@ -970,6 +971,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(502, {"ok": False, "error": str(exc)})
             except (TypeError, ValueError, OverflowError):
                 return self._json(400, {"ok": False, "error": "invalid_engine_request"})
+        if path == "/strategies/simulate-program":
+            if not self._strategy_admin_authorized():
+                return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
+            try:
+                result = evaluate_strategy_replay(payload)
+                return self._json(200, result)
+            except (TypeError, ValueError, OverflowError) as exc:
+                return self._json(400, {
+                    "ok": False,
+                    "error": "invalid_strategy_replay",
+                    "detail": str(exc)[:160],
+                    "execution": "not_attempted",
+                })
         if path == "/strategies/simulate-momentum":
             if not self._strategy_admin_authorized():
                 return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
