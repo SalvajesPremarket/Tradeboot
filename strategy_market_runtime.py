@@ -42,6 +42,7 @@ class OneMinuteCandleBuilder:
             raise ValueError("symbol_required")
         self.symbol = symbol.strip().upper()
         self._current = None
+        self._current_minute = None
         self._last_timestamp = None
 
     @staticmethod
@@ -58,20 +59,23 @@ class OneMinuteCandleBuilder:
         minute = self._minute(timestamp)
 
         if self._current is None:
+            self._current_minute = minute
             self._current = self._new_candle(minute, price)
             return None
 
-        if minute == self._current["timestamp"]:
+        if minute == self._current_minute:
             self._current["high"] = max(self._current["high"], price)
             self._current["low"] = min(self._current["low"], price)
             self._current["close"] = price
             self._current["ticks"] += 1
             return None
 
-        if minute < self._current["timestamp"]:
+        if minute < self._current_minute:
             raise ValueError("out_of_order_tick")
 
         closed = dict(self._current)
+        closed["complete"] = True
+        self._current_minute = minute
         self._current = self._new_candle(minute, price)
         return closed
 
