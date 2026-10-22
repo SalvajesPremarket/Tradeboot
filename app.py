@@ -18,7 +18,7 @@ from tradeboot import Tradeboot
 from strategy_engine import StrategyFormulaError, evaluate_formula, validate_formula
 from strategy_program import validate_strategy_source
 from strategy_simulation import simulate_momentum
-from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital
+from strategy_store import StrategyStoreUnavailable, list_strategies, replace_strategies, get_general_capital, set_general_capital, _connect
 
 
 module = Tradeboot()
@@ -743,6 +743,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == "/health/database":
+            try:
+                with _connect() as conn:
+                    conn.execute("SELECT 1").fetchone()
+                return self._json(200, {"ok": True, "database": "connected"})
+            except StrategyStoreUnavailable:
+                return self._json(503, {"ok": False, "database": "unavailable"})
+            except Exception:
+                return self._json(503, {"ok": False, "database": "unavailable"})
         if path in ("/strategies", "/strategies/capital"):
             if not self._strategy_admin_authorized():
                 return self._json(401, {"ok": False, "error": "strategy_admin_auth_required"})
