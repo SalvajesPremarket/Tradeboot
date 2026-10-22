@@ -707,6 +707,25 @@ class Handler(BaseHTTPRequestHandler):
                 strategy = strategies[0]
                 if strategy.get("strategyType") != "formula":
                     return self._json(409, {"ok": False, "error": "python_program_engine_not_supported"})
+                # Treat configured strategy allocation and general capital as a hard
+                # per-order ceiling; caller-supplied amount alone must not set risk.
+                general_capital = get_general_capital()
+                allocation_percent = strategy.get("allocationPercent", 0)
+                if (not isinstance(general_capital, (int, float)) or isinstance(general_capital, bool)
+                        or not math.isfinite(general_capital) or general_capital <= 0
+                        or not isinstance(allocation_percent, (int, float))
+                        or isinstance(allocation_percent, bool) or not math.isfinite(allocation_percent)
+                        or allocation_percent <= 0 or allocation_percent > 100):
+                    return self._json(409, {
+                        "ok": False, "error": "valid_general_capital_and_strategy_allocation_required",
+                    })
+                allocation_cap = general_capital * allocation_percent / 100.0
+                if amount > allocation_cap:
+                    return self._json(409, {
+                        "ok": False, "error": "order_exceeds_strategy_allocation",
+                        "amount_usd": float(amount), "allocation_cap_usd": round(allocation_cap, 2),
+                        "allocation_percent": float(allocation_percent),
+                    })
                 status, market = fetch_market_context(symbol)
                 if status != 200 or not market.get("ok"):
                     return self._json(502, {"ok": False, "error": "market_context_unavailable", "market": market})
