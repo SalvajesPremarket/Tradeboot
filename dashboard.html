@@ -103,7 +103,7 @@ async function saveGeneralCapital(){const input=$('strategy-capital'),status=$('
 $('capital-save').addEventListener('click',saveGeneralCapital);
 loadGeneralCapital();
 function loadStrategies(){try{const parsed=JSON.parse(localStorage.getItem(strategyStoreKey)||'[]');strategies=Array.isArray(parsed)?parsed.filter(s=>s&&typeof s.id==='string'&&typeof s.name==='string'&&typeof s.formula==='string'):[]}catch(_){strategies=[]}}
-async async function persistStrategies(){
+async function persistStrategies(){
  if(!cloudMode||!cloudToken){$('strategy-cloud-status').textContent='Conecta el almacenamiento compartido antes de cambiar el estado de una estrategia.';return false}
  const status=$('strategy-cloud-status');
  try{
