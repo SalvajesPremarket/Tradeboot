@@ -164,6 +164,30 @@ class EtoroExecutionTests(unittest.TestCase):
         self.assertEqual(seen["method"], "GET")
         self.assertTrue(seen["url"].endswith("/api/v1/trading/info/demo/portfolio"))
 
+    def test_demo_portfolio_is_read_only_when_order_placement_disabled(self):
+        os.environ["ETORO_TRADING_ENABLED"] = "false"
+        seen = {}
+
+        class Response:
+            status = 200
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                return False
+            def read(self, _):
+                return b'{"clientPortfolio":{}}'
+
+        def fake_urlopen(request, timeout):
+            seen["method"] = request.get_method()
+            seen["url"] = request.full_url
+            return Response()
+
+        with patch.object(execution, "urlopen", fake_urlopen):
+            result = execution.get_demo_portfolio()
+        self.assertTrue(result["ok"])
+        self.assertEqual(seen["method"], "GET")
+        self.assertIn("/api/v1/trading/info/demo/portfolio", seen["url"])
+
 
 if __name__ == "__main__":
     unittest.main()
