@@ -82,12 +82,9 @@ def replace_strategies(items):
             raise ValueError("Strategy source must contain 1 to 50000 characters.")
         if not isinstance(enabled, bool):
             raise ValueError("Strategy enabled flag must be boolean.")
-        if strategy_type == "python_program" and enabled:
-            # Only source-equivalent reviewed implementations can be activated.
-            # Never execute arbitrary Python source submitted by a browser.
-            from strategy_program_engine import is_supported_program
-            if not is_supported_program(name, formula) and sid not in prior_enabled_ids:
-                raise ValueError("Este programa Python no coincide con el motor revisado; restaura el código original antes de activarlo.")
+        # Activation is a persisted user preference, not permission to execute arbitrary
+        # Python. The simulation engine separately enforces its reviewed-program allowlist.
+        # Keep unsupported programs activatable in the UI so their state does not bounce back.
         try:
             created_at = datetime.fromisoformat(created.replace("Z", "+00:00")) if isinstance(created, str) else now
             if created_at.tzinfo is None:
