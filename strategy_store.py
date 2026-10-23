@@ -49,13 +49,9 @@ def list_strategies():
 
 
 def validate_program_selection(normalized):
-    """Only one of the four reviewed Python strategies may be active at a time."""
-    selected = [
-        row[1] for row in normalized
-        if row[3] == "python_program" and row[4]
-    ]
-    if len(selected) > 1:
-        raise ValueError("Activa solo una de las cuatro estrategias automáticas a la vez; desactiva las demás.")
+    """Allow multiple independently tracked strategies when each uses a reviewed engine."""
+    # Source compatibility is checked per enabled Python program below. The paper
+    # worker creates an independent simulation for every enabled strategy.
     return True
 
 
@@ -82,7 +78,7 @@ def replace_strategies(items):
         if not isinstance(enabled, bool):
             raise ValueError("Strategy enabled flag must be boolean.")
         if strategy_type == "python_program" and enabled:
-            # Only the four checked-in, reviewed implementations can be activated.
+            # Only source-equivalent reviewed implementations can be activated.
             # Never execute arbitrary Python source submitted by a browser.
             from strategy_program_engine import is_supported_program
             if not is_supported_program(name, formula):
