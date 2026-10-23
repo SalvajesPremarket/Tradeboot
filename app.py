@@ -344,6 +344,13 @@ class Handler(BaseHTTPRequestHandler):
             from schwab_integration import complete_authorization
             query = parse_qs(urlsplit(self.path).query)
             status, payload = complete_authorization(query)
+            if status == 200 and payload.get("ok") is True:
+                self.send_response(303)
+                self.send_header("Location", "/")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             return self._json(status, payload)
         if path == "/schwab/status":
             from schwab_integration import get_status
@@ -837,7 +844,14 @@ class Handler(BaseHTTPRequestHandler):
                 from schwab_integration import complete_authorization
                 status, payload = complete_authorization(parse_qs(urlsplit(self.path).query))
                 succeeded = status == 200 and payload.get("ok") is True
-                heading = "Schwab conectado" if succeeded else "No se pudo conectar Schwab"
+                if succeeded:
+                    self.send_response(303)
+                    self.send_header("Location", "/")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                heading = "No se pudo conectar Schwab"
                 detail = payload.get("message") if succeeded else payload.get("error", "schwab_authorization_failed")
                 safe_heading = heading
                 safe_detail = str(detail).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
