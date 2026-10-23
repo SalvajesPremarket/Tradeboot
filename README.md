@@ -27,7 +27,7 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 - `GET /schwab/status` informa el estado sin mostrar secretos.
 - `GET /schwab/quotes?symbols=AAPL,MSFT` consulta cotizaciones de Market Data API; no envía órdenes.
 - El motor paper consulta historial Schwab de velas de 1 minuto y velas diarias completas para los cuatro motores revisados. Solo procesa velas de minuto cerradas y nunca inventa datos ausentes.
-- Solo se permite activar una de las cuatro estrategias Python a la vez. Las señales, stops, entradas, salidas y P/L se guardan en PostgreSQL y se muestran en el panel Paper trading.
+- Se pueden activar varias estrategias Python compatibles con motores revisados; cada una se evalúa de forma independiente en cada ciclo. Las señales, stops, entradas, salidas y P/L se guardan en PostgreSQL y se muestran en el panel Paper trading.
 - La clave de cifrado `SCHWAB_TOKEN_ENCRYPTION_KEY` debe ser una clave Fernet válida. El token cifrado persistido permite guardar las rotaciones del refresh token sin depender de editar variables en cada renovación.
 - La aplicación debe estar aprobada por Schwab y tener permisos de Market Data antes de que OAuth y las cotizaciones puedan funcionar.
 
@@ -73,9 +73,9 @@ La API escucha en `http://localhost:10000` por defecto; puede cambiarse con `POR
 ## Motor Momentum Tramos en la rama de trabajo
 
 - `momentum_tramos.py` contiene la implementación revisada del motor; `strategy_simulation.py` ofrece un adaptador de simulación acotado.
-- El dashboard muestra **Probar motor (simulación)** para una estrategia Python cuyo nombre incluya `Momentum Tramos`. La prueba utiliza datos sintéticos y requiere almacenamiento compartido conectado.
-- Los programas Python guardados no se ejecutan como código arbitrario. La simulación invoca únicamente el motor integrado revisado.
-- La rama de trabajo aún debe pasar revisión antes de incorporarse a `main`; no se ha desplegado esta integración en Render.
+- El dashboard muestra **Probar motor (simulación)** para la estrategia Python compatible con Momentum Tramos. La prueba utiliza datos sintéticos y requiere almacenamiento compartido conectado.
+- Los programas Python guardados no se ejecutan como código arbitrario. La activación identifica el motor revisado por equivalencia de sintaxis (ignora comentarios, espacios y docstrings); cambiar la lógica requiere revisar e integrar un motor específico.
+- La integración de motores revisados está en `main`; Render despliega automáticamente los cambios enviados a esta rama.
 
 ## Pendiente antes de considerar listo para producción
 
