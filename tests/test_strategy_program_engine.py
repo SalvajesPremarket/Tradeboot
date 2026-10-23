@@ -37,12 +37,21 @@ class StrategyProgramEngineTests(unittest.TestCase):
             payload["daily_candles"] = daily
         return payload
 
-    def test_only_exact_reviewed_sources_are_accepted(self):
+    def test_reviewed_source_accepts_uploaded_filename_and_ignores_comments(self):
         for name, (module, _class_name, kind) in _REGISTRY.items():
             source = inspect.getsource(module)
             self.assertTrue(is_supported_program(name, source))
-            self.assertFalse(is_supported_program(name, source + "\n# modified"))
-            self.assertFalse(is_supported_program("untrusted-program", source))
+            self.assertTrue(is_supported_program("estrategia_01_momentum.py", source + "\n# comentario del usuario"))
+            self.assertFalse(is_supported_program("uploaded-program", source + "\nraise RuntimeError('changed logic')"))
+
+    def test_uploaded_name_runs_only_matching_reviewed_logic(self):
+        name, (module, _class_name, kind) = next(iter(_REGISTRY.items()))
+        payload = self._payload(name, module, kind)
+        payload["strategyName"] = "estrategia_01_momentum.py"
+        result = simulate_program(payload)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["strategy"], "estrategia_01_momentum.py")
+        self.assertFalse(result["real_orders_enabled"])
 
     def test_all_four_reviewed_engines_run_in_simulation_only_mode(self):
         for name, (module, _class_name, kind) in _REGISTRY.items():
