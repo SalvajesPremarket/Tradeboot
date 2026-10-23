@@ -32,7 +32,7 @@ def _normalized_program(source):
         body = getattr(node, "body", None)
         if not isinstance(body, list):
             return
-        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, (ast.Str, ast.Constant)):
+        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
             value = getattr(body[0].value, "value", getattr(body[0].value, "s", None))
             if isinstance(value, str):
                 body.pop(0)
