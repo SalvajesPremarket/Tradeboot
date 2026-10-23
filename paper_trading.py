@@ -115,10 +115,7 @@ def run_cycle():
     capital = get_general_capital()
     evaluated = 0
     skipped = []
-    if len(active_programs) > 1:
-        skipped.append({"reason": "multiple_python_strategies_enabled",
-                        "strategy_ids": [item.get("id") for item in active_programs]})
-        active_programs = []
+    # Every enabled reviewed Python strategy is evaluated independently each cycle.
     # Formula strategies can use eToro snapshots; the four reviewed Python engines
     # require historical OHLCV and are fed only by Schwab's read-only price-history API.
     for symbol in symbols:
@@ -274,8 +271,8 @@ def run_cycle():
 
             for strategy in active_programs:
                 try:
-                    from strategy_program_engine import _REGISTRY
-                    spec = _REGISTRY.get(strategy["name"])
+                    from strategy_program_engine import resolve_supported_program
+                    spec = resolve_supported_program(strategy["name"], strategy["formula"])
                     if not spec:
                         skipped.append({"symbol": symbol, "strategy_id": strategy["id"],
                                         "reason": "unsupported_reviewed_strategy"})
