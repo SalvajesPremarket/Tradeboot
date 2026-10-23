@@ -56,6 +56,11 @@ def validate_program_selection(normalized):
 
 
 def replace_strategies(items):
+    # Preserve existing active rows while editing another strategy. Older saved Python
+    # programs may no longer match the reviewed adapter exactly; they must not make
+    # unrelated formula/strategy toggles fail. Newly enabling unsupported Python is
+    # still rejected below.
+    prior_enabled_ids = {item["id"] for item in list_strategies() if item.get("enabled")}
     now = datetime.now(timezone.utc)
     normalized = []
     for item in items:
@@ -81,7 +86,7 @@ def replace_strategies(items):
             # Only source-equivalent reviewed implementations can be activated.
             # Never execute arbitrary Python source submitted by a browser.
             from strategy_program_engine import is_supported_program
-            if not is_supported_program(name, formula):
+            if not is_supported_program(name, formula) and sid not in prior_enabled_ids:
                 raise ValueError("Este programa Python no coincide con el motor revisado; restaura el código original antes de activarlo.")
         try:
             created_at = datetime.fromisoformat(created.replace("Z", "+00:00")) if isinstance(created, str) else now
