@@ -810,6 +810,50 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == "/schwab/status":
+            try:
+                from schwab_integration import get_status
+                status, payload = get_status()
+                return self._json(status, payload)
+            except Exception:
+                return self._json(503, {"ok": False, "provider": "schwab", "error": "schwab_status_unavailable"})
+        if path == "/oauth/start":
+            if not self._account_admin_authorized():
+                return self._json(403, {"ok": False, "error": "administrator_required"})
+            try:
+                from schwab_integration import authorization_url
+                target = authorization_url()
+                self.send_response(302)
+                self.send_header("Location", target)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            except ValueError as exc:
+                return self._json(503, {"ok": False, "error": str(exc)})
+            except Exception:
+                return self._json(503, {"ok": False, "error": "schwab_oauth_start_failed"})
+        if path == "/oauth/callback":
+            try:
+                from schwab_integration import complete_authorization
+                status, payload = complete_authorization(parse_qs(urlsplit(self.path).query))
+                succeeded = status == 200 and payload.get("ok") is True
+                heading = "Schwab conectado" if succeeded else "No se pudo conectar Schwab"
+                detail = payload.get("message") if succeeded else payload.get("error", "schwab_authorization_failed")
+                safe_heading = heading
+                safe_detail = str(detail).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                body = ("<!doctype html><html lang='es'><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                        "<title>" + safe_heading + "</title><body style='font:16px system-ui;max-width:680px;margin:12vh auto;padding:24px;background:#0b1120;color:#edf3fc'>"
+                        "<h1>" + safe_heading + "</h1><p>" + safe_detail + "</p><p><a style='color:#71e4ba' href='/'>Volver a TradeBoot</a></p></body></html>")
+                encoded = body.encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(encoded)
+                return
+            except Exception:
+                return self._json(503, {"ok": False, "error": "schwab_callback_failed"})
         if path == "/auth/me":
             try:
                 from tradeboot_auth import ensure_bootstrap_admin

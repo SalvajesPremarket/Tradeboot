@@ -23,9 +23,11 @@ class ProgramSelectionTests(unittest.TestCase):
             row("JeanShort", False),
         ]))
 
-    def test_two_enabled_programs_are_rejected(self):
-        with self.assertRaisesRegex(ValueError, "solo una"):
-            validate_program_selection([row("JeanLong"), row("JeanShort")])
+    def test_multiple_enabled_programs_are_allowed_for_independent_tracking(self):
+        self.assertTrue(validate_program_selection([
+            row("JeanLong"),
+            row("JeanShort"),
+        ]))
 
     def test_formula_strategies_are_not_counted_as_programs(self):
         self.assertTrue(validate_program_selection([

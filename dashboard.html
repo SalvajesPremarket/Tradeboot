@@ -27,7 +27,7 @@
 <div class="wrap">
 <header class="top">
   <div class="brand"><div class="logo">↗</div><div><h1>Tradeboot</h1><p>Market Watch · eToro · Solo lectura</p></div></div>
-  <div class="actions"><span class="pill"><span class="dot" id="connection-dot"></span><span id="connection-text">Conectando…</span></span><button id="refresh">Actualizar ahora ↻</button></div>
+  <div class="actions"><span class="pill"><span class="dot" id="connection-dot"></span><span id="connection-text">Conectando…</span></span><span class="pill"><span class="dot" id="schwab-dot"></span><span id="schwab-status">Schwab: comprobando…</span></span><button type="button" id="schwab-connect" class="secondary" hidden>Conectar Schwab</button><button id="refresh">Actualizar ahora ↻</button></div>
 </header>
 <section class="hero">
   <div><div class="eyebrow">Panel de mercado</div><h2>Seguimiento de cotizaciones</h2><p id="updated">Esperando la primera captura de precios…</p></div>
@@ -162,15 +162,30 @@ async function connectStrategyStorage(){
  const cr=await fetch('/strategies/capital',{credentials:'same-origin',cache:'no-store'}),cd=await cr.json();if(cr.ok&&cd.ok){generalCapital=Number(cd.capital)||0;$('strategy-capital').value=String(generalCapital);updateBudgetPreview();$('capital-status').textContent='Monto general cargado de PostgreSQL.';}await loadUsagePercent();}
  }catch(e){cloudMode=false;status.textContent='No conectado: '+e.message}
 }
+async function refreshSchwabStatus(){
+ const label=$('schwab-status'),dot=$('schwab-dot'),button=$('schwab-connect');
+ try{
+  const r=await fetch('/schwab/status',{credentials:'same-origin',cache:'no-store'}),d=await r.json();
+  if(!r.ok||!d.ok)throw new Error(d.error||'estado no disponible');
+  if(d.authorized){
+   label.textContent='Schwab: autorizado';dot.className='dot ok';button.textContent='Reautorizar Schwab';
+  }else if(d.configured){
+   label.textContent='Schwab: falta autorizar';dot.className='dot';button.textContent='Conectar Schwab';
+  }else{
+   label.textContent='Schwab: falta configuración';dot.className='dot bad';button.textContent='Conectar Schwab';
+  }
+ }catch(e){label.textContent='Schwab: estado no disponible';dot.className='dot bad';}
+}
+$('schwab-connect').addEventListener('click',()=>{window.location.href='/oauth/start';});
 async function refreshAccount(){
  try{const r=await fetch('/auth/me',{credentials:'same-origin',cache:'no-store'}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'Autenticación no disponible');
- accountUser=d.authenticated?d.user:null;const canEdit=!!(accountUser&&(accountUser.role==='admin'||accountUser.editor_enabled));
+ accountUser=d.authenticated?d.user:null;const canEdit=!!(accountUser&&(accountUser.role==='admin'||accountUser.editor_enabled));$('schwab-connect').hidden=!(accountUser&&accountUser.role==='admin');await refreshSchwabStatus();
  $('strategy-manager').hidden=!canEdit;$('account-login-form').hidden=!!accountUser;$('account-logout').hidden=!accountUser;$('account-change-password').hidden=!accountUser;$('account-admin').hidden=!(accountUser&&accountUser.role==='admin');
  $('account-title').textContent=accountUser?'Sesión iniciada: '+accountUser.username:'Iniciar sesión en TradeBoot';
  $('account-message').textContent=accountUser?(canEdit?'Cuenta autorizada · editor sincronizado con PostgreSQL.':'Cuenta sin permiso de edición; solicita acceso al administrador.'):'Usa tu usuario y contraseña. No necesitas volver a introducir el token privado.';
  if(accountUser&&canEdit)await connectStrategyStorage();else{cloudMode=false;$('strategy-cloud-status').textContent='Inicia sesión con una cuenta autorizada para sincronizar.';}
  if(accountUser&&accountUser.role==='admin')await refreshAccountUsers();
- }catch(e){accountUser=null;$('strategy-manager').hidden=true;$('account-message').textContent='No se pudo comprobar la cuenta: '+e.message}
+ }catch(e){accountUser=null;$('schwab-connect').hidden=true;$('strategy-manager').hidden=true;$('account-message').textContent='No se pudo comprobar la cuenta: '+e.message;await refreshSchwabStatus()}
 }
 async function refreshAccountUsers(){
  try{const r=await fetch('/auth/users',{credentials:'same-origin',cache:'no-store'}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'Error al listar usuarios');
