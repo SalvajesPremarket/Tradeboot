@@ -22,16 +22,57 @@ _REGISTRY = {
 def supported_program_names():
     return tuple(_REGISTRY)
 
-def is_supported_program(name, source):
-    """True only when both the name and saved source match a reviewed checked-in file."""
-    spec = _REGISTRY.get(name)
-    if not spec or not isinstance(source, str):
-        return False
+def _normalized_program(source):
+    """Normalize Python syntax so comments, whitespace and docstrings do not block activation."""
+    import ast
+
+    tree = ast.parse(source, mode="exec")
+
+    def strip_docstrings(node):
+        body = getattr(node, "body", None)
+        if not isinstance(body, list):
+            return
+        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, (ast.Str, ast.Constant)):
+            value = getattr(body[0].value, "value", getattr(body[0].value, "s", None))
+            if isinstance(value, str):
+                body.pop(0)
+        for child in ast.iter_child_nodes(node):
+            strip_docstrings(child)
+
+    strip_docstrings(tree)
+    return ast.dump(tree, annotate_fields=True, include_attributes=False)
+
+
+def resolve_supported_program(name, source):
+    """Resolve an uploaded source to a reviewed engine, even when its UI name differs.
+
+    Only syntax-equivalent reviewed logic is accepted. Arbitrary uploaded Python is
+    never compiled or executed by the server.
+    """
+    if not isinstance(source, str) or not source.strip():
+        return None
     try:
-        checked_in = inspect.getsource(spec[0]).strip()
-    except (OSError, TypeError):
-        return False
-    return source.strip() == checked_in
+        candidate = _normalized_program(source)
+    except (SyntaxError, ValueError, TypeError, RecursionError):
+        return None
+
+    preferred = _REGISTRY.get(name)
+    ordered = ([ (name, preferred) ] if preferred else []) + [
+        (key, spec) for key, spec in _REGISTRY.items() if key != name
+    ]
+    for _key, spec in ordered:
+        try:
+            checked_in = _normalized_program(inspect.getsource(spec[0]))
+        except (OSError, TypeError, SyntaxError, ValueError, RecursionError):
+            continue
+        if candidate == checked_in:
+            return spec
+    return None
+
+
+def is_supported_program(name, source):
+    """True only if source matches a reviewed engine; display name need not be canonical."""
+    return resolve_supported_program(name, source) is not None
 
 def _timestamp(value, field):
     if not isinstance(value, str) or not value.strip():
@@ -85,7 +126,10 @@ def simulate_program(payload):
     source = payload.get("formula")
     if not is_supported_program(name, source):
         raise ValueError("Este programa no coincide exactamente con una implementación revisada; no se ejecutará código Python recibido.")
-    module, class_name, kind = _REGISTRY[name]
+    spec = resolve_supported_program(name, source)
+    if spec is None:
+        raise ValueError("Este programa no coincide con una implementación revisada; no se ejecutará código Python recibido.")
+    module, class_name, kind = spec
     symbol = payload.get("symbol", "SIM")
     if not isinstance(symbol, str) or not symbol.strip() or len(symbol) > 20:
         raise ValueError("Invalid symbol.")
