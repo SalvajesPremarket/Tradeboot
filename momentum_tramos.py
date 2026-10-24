@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from datetime import datetime
+from datetime import datetime, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 SIDE = "LONG"
 STRATEGY_NAME = "Momentum Tramos"
@@ -16,16 +17,18 @@ STRATEGY_NAME = "Momentum Tramos"
 CONFIG: dict[str, Any] = {
     "t1_end": 20, "t2_end": 40,
     "ema_fast": 20, "max_prior_streak": 1,
-    "macd_fast": 12, "macd_slow": 26, "clearance_pct": 2.0,
+    "macd_fast": 12, "macd_slow": 26, "clearance_pct": 2.0,  # legacy key; geometric filter below takes precedence
     "open_tol_pct": 0.02, "min_dip_pct": 0.05, "trading_window": None,
-    "t2_close_if_back_to_open": True, "close_on_return_from_candle3": False,
+    "timezone": "America/New_York", "session_start": "04:00",
+    "last_entry_time": "14:00", "session_end": "16:00",
+    "t2_close_if_back_to_open": True, "close_on_return_from_candle3": True,
     "candle2_stop_delay_sec": 20, "stop_buffer_pct": 0.05, "hard_stop_pct": 3.0,
     "bb_period": 20, "bb_std": 2.0, "gs_body_max": 0.20,
     "gs_reject_wick_min": 0.60, "gs_small_wick_max": 0.20, "gs_live_from_sec": 45,
     "use_scanner_filters": True, "gap_min_pct": 5.0, "gap_ideal_pct": 10.0,
     "rvol_min": 5.0, "price_min": 1.0, "price_max": 20.0,
     "float_max": 20_000_000, "news_required": True,
-    "news_max_age_hours": 16, "news_require_keyword": False,
+    "news_max_age_hours": 16, "news_require_keyword": True,
 }
 CATALYSTS = {
     "earnings": ("earnings", "quarter", "q1", "q2", "q3", "q4", "revenue", "eps", "guidance", "resultados", "ganancias", "trimestre"),
@@ -70,6 +73,7 @@ class MomentumTrader:
         self.prev = self.c = self.pos = None
         self.last_reject, self.ctx, self.last_metrics = [], {}, {}
         self.day_volume = None
+        self._session_date = None
 
     def seed(self, candles: list[dict]) -> None:
         for candle in candles:
@@ -82,6 +86,19 @@ class MomentumTrader:
     def on_tick(self, price: float, ts: datetime, day_volume: float | None = None) -> list[dict]:
         if not math.isfinite(float(price)) or price <= 0:
             return []
+        local_ts = self._local_time(ts)
+        session_date = local_ts.date()
+        if self._session_date is None:
+            self._session_date = session_date
+        elif session_date != self._session_date:
+            # Do not carry a simulated position or partial candle into another session.
+            actions = self._exit(price, "cierre de seguridad por cambio de jornada") if self.pos else []
+            self.c = self.prev = None
+            self._session_date = session_date
+            return actions
+        session_end = self._parse_clock(self.cfg["session_end"])
+        if local_ts.time().replace(tzinfo=None) >= session_end:
+            return self._exit(price, "cierre obligatorio a las 16:00 hora de Nueva York") if self.pos else []
         actions = []
         if day_volume is not None:
             self.day_volume = day_volume
@@ -99,12 +116,26 @@ class MomentumTrader:
         actions += self._manage(price, sec, ts)
         return actions
 
+    def _local_time(self, ts: datetime) -> datetime:
+        """Convert timestamps to the configured market timezone; naive values mean market-local time."""
+        zone = ZoneInfo(self.cfg.get("timezone", "America/New_York"))
+        if ts.tzinfo is None:
+            return ts.replace(tzinfo=zone)
+        return ts.astimezone(zone)
+
+    @staticmethod
+    def _parse_clock(value: str) -> time:
+        hour, minute = (int(part) for part in value.split(":", 1))
+        return time(hour, minute)
+
     def _manage(self, price, sec, ts):
         cfg, c = self.cfg, self.c
         dev = self.d * (price - c["open"]) / c["open"] * 100
         tol = cfg["open_tol_pct"]
         if c["first_move"] is None and abs(dev) >= tol:
             c["first_move"] = "fav" if dev > 0 else "adv"
+        if dev > 0:
+            c["went_fav"] = True
         c["adv_dip"] = max(c["adv_dip"], -dev)
         if sec <= cfg["t1_end"]:
             if dev >= tol:
@@ -117,6 +148,10 @@ class MomentumTrader:
 
     def _try_enter(self, price, sec, ts, dev):
         cfg, c = self.cfg, self.c
+        local_ts = self._local_time(ts)
+        local_clock = local_ts.time().replace(tzinfo=None)
+        if not (self._parse_clock(cfg["session_start"]) <= local_clock < self._parse_clock(cfg["last_entry_time"])):
+            return []
         if (sec > cfg["t1_end"] or c["entered_here"] or c["pattern_inverted"]
                 or c["first_move"] != "adv" or c["adv_dip"] < cfg["min_dip_pct"] or dev < 0):
             return []
@@ -153,12 +188,25 @@ class MomentumTrader:
             reasons.append(f"ya lleva {self.streak} velas del lado de la EMA20")
         if d * macd <= 0:
             reasons.append("MACD en contra")
+        # Require EMA50/EMA200 history; otherwise the obstacle test is unknowable.
+        bands = self._bands(price)
+        ema20_value = ema.peek(price)
         for n in (50, 200):
             e = self.ema[n]
-            if e.ready:
-                ahead = d * (e.v - price)
-                if 0 < ahead / price * 100 <= cfg["clearance_pct"]:
-                    reasons.append(f"EMA{n} en el camino")
+            if not e.ready:
+                reasons.append(f"historial insuficiente para EMA{n}")
+                continue
+            if bands is None:
+                reasons.append("historial insuficiente para Bollinger")
+                break
+            upper_band = bands[0] if d == 1 else bands[1]
+            level = e.v
+            # LONG: an EMA is an obstacle only when it sits strictly between EMA20 and upper band.
+            # SHORT mirrors the geometry between EMA20 and lower band.
+            if d == 1 and ema20_value < level < upper_band:
+                reasons.append(f"EMA{n} interpuesta entre EMA20 y Bollinger superior")
+            elif d == -1 and upper_band < level < ema20_value:
+                reasons.append(f"EMA{n} interpuesta entre EMA20 y Bollinger inferior")
         return reasons
 
     def _manage_position(self, price, sec, dev):
@@ -177,11 +225,11 @@ class MomentumTrader:
             prev = self.prev
             ext = c["low"] if d == 1 else c["high"]
             higher = prev is not None and d * (ext - prev["adv_ext"]) > 0
-            positive_open = c["first_move"] == "fav"
+            positive_open = c.get("went_fav", False)
             if k == 2 and positive_open and dev <= 0:
                 return self._exit(price, "vela 2 regreso a su apertura")
-            if k >= 3 and cfg["close_on_return_from_candle3"] and positive_open and dev <= 0:
-                return self._exit(price, "regreso a su apertura")
+            if k >= 3 and cfg["close_on_return_from_candle3"] and dev <= 0:
+                return self._exit(price, "regreso a la apertura de la vela")
             if higher and dev > 0 and (k >= 3 or (positive_open and sec >= cfg["candle2_stop_delay_sec"])):
                 action = self._raise_stop(prev["close"], price)
                 if action:
@@ -222,7 +270,7 @@ class MomentumTrader:
     def _new_candle(self, start, price):
         self.c = {"start": start, "open": price, "high": price, "low": price, "close": price,
                   "first_move": None, "adv_dip": 0.0, "went_fav_t1": False,
-                  "pattern_inverted": False, "entered_here": False}
+                  "pattern_inverted": False, "entered_here": False, "went_fav": False}
 
     def _snap(self, c):
         return {"close": c["close"], "open": c["open"], "high": c["high"], "low": c["low"],
@@ -264,7 +312,8 @@ class MomentumTrader:
             touched, reject, small = h >= bands[0], top_wick, bot_wick
         else:
             touched, reject, small = l <= bands[1], bot_wick, top_wick
-        return touched and body <= cfg["gs_body_max"] and reject >= cfg["gs_reject_wick_min"] and small <= cfg["gs_small_wick_max"]
+        positive_close = self.d * (close_price - o) > 0
+        return touched and positive_close and body <= cfg["gs_body_max"] and reject >= cfg["gs_reject_wick_min"] and small <= cfg["gs_small_wick_max"]
 
     def _scanner_filters(self, price, ts):
         cfg, ctx, reasons = self.cfg, self.ctx, []
