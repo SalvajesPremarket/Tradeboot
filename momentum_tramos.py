@@ -324,14 +324,27 @@ class MomentumTrader:
         metrics["precio"] = round(price, 4)
         if not cfg["price_min"] <= price <= cfg["price_max"]:
             reasons.append(f"precio fuera de ${cfg['price_min']}-${cfg['price_max']}")
-        previous_close = ctx.get("prev_close")
-        if not previous_close or previous_close <= 0:
-            reasons.append("sin cierre anterior (prev_close)")
-        else:
-            gap = (price - previous_close) / previous_close * 100
-            metrics["gap_pct"], metrics["gap_ideal"] = round(gap, 2), gap >= cfg["gap_ideal_pct"]
-            if gap < cfg["gap_min_pct"]:
-                reasons.append(f"gap {gap:.1f}% < {cfg['gap_min_pct']}%")
+        # Prefer an explicit pre-market change supplied by the market-data adapter.
+        # For compatibility, derive it from current price vs previous close when absent.
+        premarket_gain = ctx.get("premarket_change_pct")
+        if premarket_gain is not None:
+            try:
+                premarket_gain = float(premarket_gain)
+            except (TypeError, ValueError):
+                premarket_gain = None
+        if premarket_gain is None:
+            previous_close = ctx.get("prev_close")
+            if not previous_close or previous_close <= 0:
+                reasons.append("sin cierre anterior (prev_close)")
+            else:
+                premarket_gain = (price - previous_close) / previous_close * 100
+        if premarket_gain is not None:
+            metrics["premarket_gain_pct"] = round(premarket_gain, 2)
+            metrics["gap_pct"] = round(premarket_gain, 2)  # legacy diagnostics compatibility
+            metrics["gain_ideal"] = premarket_gain >= cfg["gap_ideal_pct"]
+            metrics["gap_ideal"] = metrics["gain_ideal"]
+            if premarket_gain < cfg["gap_min_pct"]:
+                reasons.append(f"ganancia pre-market {premarket_gain:.1f}% < {cfg['gap_min_pct']}%")
         base = ctx.get("avg_premarket_volume_30d") or ctx.get("avg_volume_30d")
         volume = self.day_volume if self.day_volume is not None else ctx.get("volume_today")
         if not base or base <= 0 or volume is None:

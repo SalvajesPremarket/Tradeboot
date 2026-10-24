@@ -156,6 +156,10 @@ def simulate_program(payload):
     for key in ("prev_close", "avg_premarket_volume_30d", "avg_volume_30d", "volume_today", "float_shares"):
         if clean_context.get(key) is not None:
             clean_context[key] = _number(clean_context[key], f"context.{key}", nonnegative=True)
+    if clean_context.get("premarket_change_pct") is not None:
+        clean_context["premarket_change_pct"] = _number(
+            clean_context["premarket_change_pct"], "context.premarket_change_pct"
+        )
     news = clean_context.get("news", [])
     if not isinstance(news, list) or len(news) > 100:
         raise ValueError("context.news must be a list with at most 100 items.")
