@@ -64,10 +64,21 @@ class StrategyProgramEngineTests(unittest.TestCase):
                 self.assertIsInstance(result["actions"], list)
                 self.assertTrue(all(isinstance(action.get("event_at"), str) for action in result["actions"]))
 
-    def test_modified_python_source_is_never_executed(self):
+    def test_stale_canonical_source_uses_reviewed_engine_without_execution(self):
         module, _class_name, kind = _REGISTRY["JeanLong"]
         payload = self._payload("JeanLong", module, kind)
+        # A stale saved source may differ from the current engine. The server must
+        # still run only the checked-in engine and never execute this appended code.
         payload["formula"] += "\nraise RuntimeError('must not run')"
+        result = simulate_program(payload)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["engine"], "reviewed_python_program")
+        self.assertFalse(result["real_orders_enabled"])
+
+    def test_noncanonical_modified_python_source_is_rejected(self):
+        module, _class_name, kind = _REGISTRY["JeanLong"]
+        payload = self._payload("estrategia_01_jeanlong", module, kind)
+        payload["formula"] += "\\nraise RuntimeError('must not run')"
         with self.assertRaises(ValueError):
             simulate_program(payload)
 
