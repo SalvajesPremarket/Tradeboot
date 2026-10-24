@@ -1,4 +1,4 @@
-"""Allowlisted, reviewed simulation adapters for the four saved Tradeboot programs.
+"""Allowlisted, reviewed simulation adapters for saved Tradeboot programs.
 
 Never compiles or executes strategy source received over HTTP. Each program name is
 bound to a checked-in implementation, and activation requires an exact source match.
@@ -10,9 +10,11 @@ import inspect
 import math
 from datetime import datetime, timezone
 
+import momentum_tramos
 from strategy_programs import jean_long, jean_short, pullback_long, pullback_short
 
 _REGISTRY = {
+    "Momentum Tramos": (momentum_tramos, "MomentumTrader", "momentum"),
     "JeanLong": (jean_long, "MomentumTrader", "momentum"),
     "JeanShort": (jean_short, "MomentumTrader", "momentum"),
     "PULLBACK LONG EMA50 o 200 D W": (pullback_long, "PullbackLongTrader", "pullback"),
