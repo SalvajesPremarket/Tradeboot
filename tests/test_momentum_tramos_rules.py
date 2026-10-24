@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime
+from unittest.mock import patch
 
 from momentum_tramos import MomentumTrader
 
@@ -15,7 +16,7 @@ class MomentumTramosRulesTests(unittest.TestCase):
         bot.ema[50].v = 1.9
         bot.ema[200].v = 1.7
         bot.m_fast.v, bot.m_slow.v = 2.1, 1.8
-        with unittest.mock.patch.object(bot, "_bands", return_value=(2.2, 1.5)):
+        with patch.object(bot, "_bands", return_value=(2.2, 1.5)):
             reasons = bot._entry_filters(2.0, datetime(2026, 10, 23, 10, 0))
         self.assertIn("EMA50 interpuesta entre EMA20 y Bollinger superior", reasons)
         self.assertNotIn("EMA200 interpuesta entre EMA20 y Bollinger superior", reasons)
@@ -26,7 +27,7 @@ class MomentumTramosRulesTests(unittest.TestCase):
             "first_move": "adv", "adv_dip": 0.1, "pattern_inverted": False,
             "entered_here": False, "low": 1.99, "high": 2.01, "open": 2.0,
         }
-        with unittest.mock.patch.object(bot, "_entry_filters", return_value=[]):
+        with patch.object(bot, "_entry_filters", return_value=[]):
             actions = bot._try_enter(2.0, 10, datetime(2026, 10, 23, 14, 1))
         self.assertEqual(actions, [])
         self.assertIsNone(bot.pos)
@@ -41,8 +42,18 @@ class MomentumTramosRulesTests(unittest.TestCase):
 
     def test_news_without_supported_catalyst_is_rejected(self):
         bot = MomentumTrader("TEST", "LONG", {"use_scanner_filters": False, "news_require_keyword": True})
+        bot.set_context({"news": [{
+            "published_at": datetime(2026, 10, 23, 9, 0),
+            "headline": "Company launches redesigned investor website",
+        }]})
         result = bot._fresh_news(datetime(2026, 10, 23, 10, 0))
         self.assertIsNone(result)
+        bot.set_context({"news": [{
+            "published_at": datetime(2026, 10, 23, 9, 0),
+            "headline": "Company announces record quarterly earnings and revenue",
+        }]})
+        result = bot._fresh_news(datetime(2026, 10, 23, 10, 0))
+        self.assertEqual(result["categoria"], "earnings")
 
 
 if __name__ == "__main__":
