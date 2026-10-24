@@ -43,7 +43,7 @@ COMO LO USA EL TRADEBOOT
                      "avg_volume_30d": 850_000,         # volumen diario promedio 30 dias
                      "float_shares": 12_500_000,
                      "news": [{"published_at": datetime, "headline": "texto"}]})
-                    # opcional: "avg_premarket_volume_30d" (si existe, se usa para el RVol)
+                    # RVol usa el promedio diario de 30 días: "avg_volume_30d".
     bot.seed(velas_cerradas_1m)                         # opcional pero recomendado (200+ velas)
     acciones = bot.on_tick(precio, datetime_con_segundos, volumen_acumulado_del_dia)   # en CADA tick/segundo
     # volumen_acumulado_del_dia = volumen total de hoy hasta ahora (premarket incluido)
@@ -425,7 +425,7 @@ class MomentumTrader:
             if premarket_gain < cfg["gap_min_pct"]:
                 r.append(f"ganancia pre-market {premarket_gain:.1f}% < {cfg['gap_min_pct']}%")
 
-        base = ctx.get("avg_premarket_volume_30d") or ctx.get("avg_volume_30d")
+        base = ctx.get("avg_volume_30d") or ctx.get("avg_premarket_volume_30d")
         vol = self.day_volume if self.day_volume is not None else ctx.get("volume_today")
         if not base or base <= 0 or vol is None:
             r.append("sin volumen promedio 30d o volumen de hoy")
