@@ -335,7 +335,7 @@ class MomentumTrader:
         if premarket_gain is None:
             previous_close = ctx.get("prev_close")
             if not previous_close or previous_close <= 0:
-                reasons.append("sin % de ganancia pre-market ni cierre anterior (prev_close)")
+                reasons.append("sin cierre anterior (prev_close)")
             else:
                 premarket_gain = (price - previous_close) / previous_close * 100
         if premarket_gain is not None:
