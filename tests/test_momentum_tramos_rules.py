@@ -40,6 +40,54 @@ class MomentumTramosRulesTests(unittest.TestCase):
         self.assertIn("16:00", actions[0]["reason"])
         self.assertIsNone(bot.pos)
 
+
+    def test_long_scanner_filters_require_five_percent_gain_rvol_price_float_and_catalyst(self):
+        bot = MomentumTrader("TEST", "LONG")
+        now = datetime(2026, 10, 23, 8, 0)
+        bot.set_context({
+            "premarket_change_pct": 4.9,
+            "avg_volume_30d": 100000,
+            "float_shares": 10000000,
+            "news": [{"published_at": datetime(2026, 10, 23, 7, 30),
+                      "headline": "Company announces quarterly earnings beat"}],
+        })
+        bot.day_volume = 500000
+        reasons = bot._scanner_filters(5.0, now)
+        self.assertTrue(any("ganancia pre-market 4.9%" in reason for reason in reasons))
+        self.assertFalse(any("RVol" in reason for reason in reasons))
+        self.assertFalse(any("float" in reason for reason in reasons))
+        self.assertFalse(any("precio" in reason for reason in reasons))
+
+        bot.set_context({
+            "premarket_change_pct": 5.0,
+            "avg_volume_30d": 100000,
+            "float_shares": 20000000,
+            "news": [{"published_at": datetime(2026, 10, 22, 7, 0),
+                      "headline": "Company announces quarterly earnings beat"}],
+        })
+        bot.day_volume = 499999
+        reasons = bot._scanner_filters(20.01, now)
+        self.assertTrue(any("RVol" in reason for reason in reasons))
+        self.assertTrue(any("precio" in reason for reason in reasons))
+        self.assertTrue(any("float" in reason for reason in reasons))
+        self.assertTrue(any("sin noticia fresca" in reason for reason in reasons))
+
+    def test_explicit_premarket_gain_is_used_instead_of_intraday_price_fallback(self):
+        bot = MomentumTrader("TEST", "LONG")
+        bot.set_context({
+            "premarket_change_pct": 12.5,
+            "prev_close": 10.0,
+            "avg_volume_30d": 100,
+            "float_shares": 1000000,
+            "news": [{"published_at": datetime(2026, 10, 23, 7, 30),
+                      "headline": "FDA approves company's new treatment"}],
+        })
+        bot.day_volume = 1000
+        reasons = bot._scanner_filters(10.1, datetime(2026, 10, 23, 8, 0))
+        self.assertFalse(any("ganancia pre-market" in reason for reason in reasons))
+        self.assertEqual(bot.last_metrics["premarket_gain_pct"], 12.5)
+        self.assertTrue(bot.last_metrics["gain_ideal"])
+
     def test_news_without_supported_catalyst_is_rejected(self):
         bot = MomentumTrader("TEST", "LONG", {"use_scanner_filters": False, "news_require_keyword": True})
         bot.set_context({"news": [{
