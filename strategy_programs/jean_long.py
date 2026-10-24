@@ -29,7 +29,7 @@ REGLAS (largo; el corto es el espejo exacto)
     banda inferior + libelula (dragonfly) -> cierra.
 
 FILTROS DE SCANNER (se evaluan en el momento de la entrada; TODOS son obligatorios)
-    - Top gainer: sube >= 5% vs el cierre anterior (ideal >= 10%)      [gap_min_pct / gap_ideal_pct]
+    - Top gainer: ganancia pre-market >= 5% (ideal >= 10%); usa el dato pre-market explícito si el proveedor lo entrega, y si no, calcula contra el cierre anterior.
     - RVol >= 5x: volumen de hoy / volumen promedio diario de 30 dias    [rvol_min]
     - Precio entre $1 y $20                                              [price_min / price_max]
     - Float < 20,000,000 acciones                                        [float_max]
@@ -117,7 +117,7 @@ CONFIG: dict[str, Any] = {
     "float_max": 20_000_000,
     "news_required": True,
     "news_max_age_hours": 16,     # "fresca": publicada en las ultimas N horas
-    "news_require_keyword": False,  # True = solo cuenta si coincide con un catalizador conocido
+    "news_require_keyword": True,   # Solo acepta catalizadores reconocidos: earnings, FDA, contratos, fusiones o alianzas
 }
 
 CATALYSTS: dict[str, tuple[str, ...]] = {
@@ -404,14 +404,26 @@ class MomentumTrader:
         if not (cfg["price_min"] <= price <= cfg["price_max"]):
             r.append(f"precio fuera de ${cfg['price_min']}-${cfg['price_max']}")
 
-        pc = ctx.get("prev_close")
-        if not pc or pc <= 0:
-            r.append("sin cierre anterior (prev_close)")
-        else:
-            gap = (price - pc) / pc * 100
-            m["gap_pct"], m["gap_ideal"] = round(gap, 2), gap >= cfg["gap_ideal_pct"]
-            if gap < cfg["gap_min_pct"]:
-                r.append(f"gap {gap:.1f}% < {cfg['gap_min_pct']}%")
+        # Prefer the provider's explicit pre-market change; fallback to price vs previous close.
+        premarket_gain = ctx.get("premarket_change_pct")
+        if premarket_gain is not None:
+            try:
+                premarket_gain = float(premarket_gain)
+            except (TypeError, ValueError):
+                premarket_gain = None
+        if premarket_gain is None:
+            pc = ctx.get("prev_close")
+            if not pc or pc <= 0:
+                r.append("sin cierre anterior (prev_close)")
+            else:
+                premarket_gain = (price - pc) / pc * 100
+        if premarket_gain is not None:
+            m["premarket_gain_pct"] = round(premarket_gain, 2)
+            m["gap_pct"] = round(premarket_gain, 2)  # backward-compatible metric name
+            m["gain_ideal"] = premarket_gain >= cfg["gap_ideal_pct"]
+            m["gap_ideal"] = m["gain_ideal"]
+            if premarket_gain < cfg["gap_min_pct"]:
+                r.append(f"ganancia pre-market {premarket_gain:.1f}% < {cfg['gap_min_pct']}%")
 
         base = ctx.get("avg_premarket_volume_30d") or ctx.get("avg_volume_30d")
         vol = self.day_volume if self.day_volume is not None else ctx.get("volume_today")
