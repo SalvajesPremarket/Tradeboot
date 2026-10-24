@@ -69,7 +69,7 @@ class StrategyProgramEngineTests(unittest.TestCase):
         payload = self._payload("JeanLong", module, kind)
         # A stale saved source may differ from the current engine. The server must
         # still run only the checked-in engine and never execute this appended code.
-        payload["formula"] += "\\nraise RuntimeError('must not run')"
+        payload["formula"] += "\nraise RuntimeError('must not run')"
         result = simulate_program(payload)
         self.assertTrue(result["ok"])
         self.assertEqual(result["engine"], "reviewed_python_program")
