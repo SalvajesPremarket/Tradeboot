@@ -1,7 +1,9 @@
 """Allowlisted, reviewed simulation adapters for saved Tradeboot programs.
 
-Never compiles or executes strategy source received over HTTP. Each program name is
-bound to a checked-in implementation, and activation requires an exact source match.
+Never compiles or executes strategy source received over HTTP. Canonical saved
+strategy names are pinned to their checked-in implementations, so updating a
+reviewed engine does not orphan a saved strategy with an older source snapshot.
+Noncanonical names still require an exact syntax match to reviewed logic.
 Signals only; no broker order path exists.
 """
 from __future__ import annotations
@@ -59,7 +61,14 @@ def resolve_supported_program(name, source):
         return None
 
     preferred = _REGISTRY.get(name)
-    ordered = ([ (name, preferred) ] if preferred else []) + [
+    # Canonical names identify a reviewed engine, not executable user code. This
+    # compatibility path lets a saved JeanLong keep using the latest reviewed
+    # implementation after scanner fixes change the checked-in source snapshot.
+    # The submitted source has already been parsed above and is never executed.
+    if preferred is not None:
+        return preferred
+
+    ordered = [
         (key, spec) for key, spec in _REGISTRY.items() if key != name
     ]
     for _key, spec in ordered:
@@ -73,7 +82,7 @@ def resolve_supported_program(name, source):
 
 
 def is_supported_program(name, source):
-    """True only if source matches a reviewed engine; display name need not be canonical."""
+    """True only if source maps to a reviewed engine; canonical names pin to reviewed code."""
     return resolve_supported_program(name, source) is not None
 
 def _timestamp(value, field):
