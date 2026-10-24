@@ -7,7 +7,7 @@ import os
 import threading
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from strategy_store import _connect, list_strategies, get_general_capital
 from strategy_engine import evaluate_formula, StrategyFormulaError
@@ -71,7 +71,7 @@ def _fmp_scanner_context(symbol, now):
 
     # Batch-by-symbol request is cached for 30 minutes to stay within conservative API limits.
     today = now.astimezone(ZoneInfo("America/New_York")).date()
-    from_date = (today - __import__("datetime").timedelta(days=1)).isoformat()
+    from_date = (today - timedelta(days=1)).isoformat()
     to_date = today.isoformat()
     news_rows = _fmp_json("news/stock", {
         "symbols": symbol, "from": from_date, "to": to_date, "limit": 50, "page": 0,
