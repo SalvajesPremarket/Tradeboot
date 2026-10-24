@@ -13,6 +13,93 @@ from strategy_store import _connect, list_strategies, get_general_capital
 from strategy_engine import evaluate_formula, StrategyFormulaError
 from strategy_program_engine import simulate_program
 from app import fetch_market_context
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
+
+# Optional FMP enrichment for the mandatory JeanLong float/news scanner filters.
+# Credentials are read only from Render environment variables and are never logged.
+_FMP_API_KEY = (os.environ.get("FMP_API_KEY") or
+                os.environ.get("FINANCIAL_MODELING_PREP_API_KEY") or "").strip()
+_FMP_BASE = "https://financialmodelingprep.com/stable/"
+_FMP_CACHE = {}
+_FMP_CACHE_LOCK = threading.Lock()
+
+
+def _fmp_json(endpoint, params, cache_key, ttl_seconds):
+    if not _FMP_API_KEY:
+        return None
+    now = time.monotonic()
+    with _FMP_CACHE_LOCK:
+        cached = _FMP_CACHE.get(cache_key)
+        if cached and cached[0] > now:
+            return cached[1]
+    query = dict(params)
+    query["apikey"] = _FMP_API_KEY
+    request = Request(_FMP_BASE + endpoint + "?" + urlencode(query),
+                      headers={"Accept": "application/json", "User-Agent": "Tradeboot/1.0"},
+                      method="GET")
+    result = None
+    try:
+        with urlopen(request, timeout=6) as response:
+            parsed = json.loads(response.read().decode("utf-8"))
+            if isinstance(parsed, list):
+                result = parsed
+    except Exception:
+        # Fail closed: missing enrichment means JeanLong rejects the entry.
+        result = None
+    with _FMP_CACHE_LOCK:
+        _FMP_CACHE[cache_key] = (now + ttl_seconds, result)
+    return result
+
+
+def _fmp_scanner_context(symbol, now):
+    """Return only provider-backed float and recent catalyst headlines for one ticker."""
+    if not _FMP_API_KEY:
+        return {"provider": "unconfigured", "float_shares": None, "news": []}
+
+    float_rows = _fmp_json("shares-float", {"symbol": symbol},
+                           "float:" + symbol, 90 * 60)
+    float_shares = None
+    if float_rows:
+        for row in float_rows:
+            if isinstance(row, dict) and str(row.get("symbol", "")).upper() == symbol:
+                raw = row.get("floatShares")
+                if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0:
+                    float_shares = int(raw)
+                    break
+
+    # Batch-by-symbol request is cached for 30 minutes to stay within conservative API limits.
+    today = now.astimezone(ZoneInfo("America/New_York")).date()
+    from_date = (today - __import__("datetime").timedelta(days=1)).isoformat()
+    to_date = today.isoformat()
+    news_rows = _fmp_json("news/stock", {
+        "symbols": symbol, "from": from_date, "to": to_date, "limit": 50, "page": 0,
+    }, "news:" + symbol, 30 * 60)
+    news = []
+    if news_rows:
+        for row in news_rows:
+            if not isinstance(row, dict):
+                continue
+            row_symbol = str(row.get("symbol", symbol)).upper()
+            if row_symbol and row_symbol != symbol:
+                continue
+            headline = row.get("title") or row.get("headline")
+            published = row.get("publishedDate") or row.get("published_at")
+            if not isinstance(headline, str) or not isinstance(published, str):
+                continue
+            try:
+                stamp = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                if stamp.tzinfo is None:
+                    # FMP news timestamps without offsets are interpreted in New York time.
+                    stamp = stamp.replace(tzinfo=ZoneInfo("America/New_York"))
+                stamp = stamp.astimezone(timezone.utc)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            news.append({"published_at": stamp, "headline": headline[:500]})
+    return {"provider": "fmp", "float_shares": float_shares, "news": news}
+
+
 
 _INTERVAL = max(30, int(os.environ.get("PAPER_TRADING_INTERVAL_SECONDS", "60")))
 _STOP_PCT = max(0.1, min(20.0, float(os.environ.get("PAPER_TRADING_STOP_PCT", "2"))))
@@ -261,11 +348,13 @@ def run_cycle():
                                 "daily_candles": len(daily_candles)})
                 continue
             daily_volumes = [row["volume"] for row in daily_candles[-30:] if row["volume"] >= 0]
+            scanner_context = _fmp_scanner_context(symbol, started)
             context = {
                 "prev_close": daily_candles[-2]["close"] if len(daily_candles) >= 2 else None,
                 "avg_volume_30d": (sum(daily_volumes) / len(daily_volumes)) if daily_volumes else None,
                 "volume_today": cumulative_volume,
-                "news": [],
+                "float_shares": scanner_context.get("float_shares"),
+                "news": scanner_context.get("news", []),
             }
             context = {key:value for key,value in context.items() if value is not None}
 
@@ -365,6 +454,7 @@ def run_cycle():
                       "symbols":symbols,"active_formula_strategies":len(active),
                       "active_program_strategies":len(active_programs),
                       "program_engine_status":"schwab_historical_candles" if active_programs else "idle",
+                      "scanner_context_provider":"fmp" if _FMP_API_KEY else "missing_fmp_api_key",
                       "evaluations":evaluated,"skipped":skipped[:30],
                       "trading_mode":"paper_only","real_orders_enabled":False})
 
