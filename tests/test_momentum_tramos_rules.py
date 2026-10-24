@@ -28,7 +28,7 @@ class MomentumTramosRulesTests(unittest.TestCase):
             "entered_here": False, "low": 1.99, "high": 2.01, "open": 2.0,
         }
         with patch.object(bot, "_entry_filters", return_value=[]):
-            actions = bot._try_enter(2.0, 10, datetime(2026, 10, 23, 14, 1))
+            actions = bot._try_enter(2.0, 10, datetime(2026, 10, 23, 14, 1), 0.0)
         self.assertEqual(actions, [])
         self.assertIsNone(bot.pos)
 
