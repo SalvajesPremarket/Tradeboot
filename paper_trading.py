@@ -414,11 +414,10 @@ def run_cycle():
             live_at = None
             try:
                 live_price = float(quote.get("lastPrice") or quote.get("mark") or 0)
-                # Try every available timestamp field: a malformed preferred field must
-                # not hide a valid trade/quote timestamp supplied alongside it.
-                live_at = None
-                timestamp_field = None
-                timestamp_errors = []
+                # Parse every available timestamp. Prefer the newest timestamp that
+                # satisfies the freshness window; a valid-but-old preferred field
+                # must not hide a fresh alternative supplied by Schwab.
+                parsed_stamps = []
                 for field in ("quoteTimeInLong", "tradeTimeInLong", "tradeTime", "quoteTime"):
                     candidate = quote.get(field)
                     if candidate is None or candidate == "":
@@ -435,14 +434,18 @@ def run_cycle():
                             parsed_at = datetime.fromtimestamp(
                                 stamp / (1000 if stamp > 10_000_000_000 else 1), timezone.utc
                             )
-                        live_at = parsed_at.astimezone(timezone.utc)
-                        timestamp_field = field
-                        break
-                    except (TypeError, ValueError, OverflowError, OSError) as exc:
-                        timestamp_errors.append(field)
-                if live_at is None:
+                        parsed_at = parsed_at.astimezone(timezone.utc)
+                        stamp_age = (started.astimezone(timezone.utc) - parsed_at).total_seconds()
+                        parsed_stamps.append((parsed_at, field, stamp_age))
+                    except (TypeError, ValueError, OverflowError, OSError):
+                        continue
+                if not parsed_stamps:
                     raise ValueError("quote_timestamp_unavailable")
-                age = (started.astimezone(timezone.utc) - live_at).total_seconds()
+                fresh_stamps = [item for item in parsed_stamps
+                                if -10 <= item[2] <= _TICK_MAX_AGE_SECONDS]
+                live_at, timestamp_field, age = max(
+                    fresh_stamps or parsed_stamps, key=lambda item: item[0]
+                )
                 if live_price <= 0 or not __import__("math").isfinite(live_price):
                     raise ValueError("quote_price_invalid")
                 if age < -10 or age > _TICK_MAX_AGE_SECONDS:
