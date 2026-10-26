@@ -567,7 +567,9 @@ def run_cycle():
                       "active_program_strategies":len(active_programs),
                       "program_engine_status":"schwab_live_ticks_plus_historical_indicator_seed" if active_programs else "idle",
                       "scanner_context_provider":"fmp" if _FMP_API_KEY else "missing_fmp_api_key",
-                      "evaluations":evaluated,"skipped":skipped[:30],\n                      "program_skipped":program_skipped[:100],\n                      "program_skip_reason_counts":{reason:sum(1 for item in program_skipped if item.get("reason")==reason) for reason in sorted({item.get("reason","unknown") for item in program_skipped})},
+                      "evaluations":evaluated,"skipped":skipped[:30],
+                      "program_skipped":program_skipped[:100],
+                      "program_skip_reason_counts":{reason:sum(1 for item in program_skipped if item.get("reason")==reason) for reason in sorted({item.get("reason","unknown") for item in program_skipped})},
                       "trading_mode":"paper_only","real_orders_enabled":False})
 
 
