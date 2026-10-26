@@ -409,6 +409,9 @@ def run_cycle():
                 program_skipped.append({"symbol": symbol, "reason": "schwab_live_quote_unavailable",
                                 "status": quote_status, "detail": quote_payload.get("error")})
                 continue
+            age = None
+            timestamp_field = None
+            live_at = None
             try:
                 live_price = float(quote.get("lastPrice") or quote.get("mark") or 0)
                 # Try every available timestamp field: a malformed preferred field must
