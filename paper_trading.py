@@ -176,6 +176,7 @@ def _init_tables(conn):
         )
     """)
     conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS side TEXT NOT NULL DEFAULT 'LONG'")
+    conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS last_quote_at TIMESTAMPTZ")
     conn.execute("CREATE INDEX IF NOT EXISTS tradeboot_paper_trades_status_idx ON tradeboot_paper_trades(status, strategy_id, symbol)")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS tradeboot_paper_events (
@@ -236,8 +237,12 @@ def get_paper_status():
                   "entry_price":r[5],"exit_price":r[6],"quantity":r[7],"allocated_usd":r[8],"stop_price":r[9],
                   "take_price":r[10],"pnl_usd":r[11],"entry_at":r[12].isoformat(),"exit_at":r[13].isoformat() if r[13] else None,
                   "exit_reason":r[14],"side":r[15]} for r in trades]}
-    except Exception:
-        return {"ok": False, "mode": "paper_only", "worker": {"status":"unavailable"}, "error":"paper_storage_unavailable"}
+    except Exception as exc:
+        # Keep the UI message safe while making the failure class diagnosable in Render logs/API.
+        print(f"Tradeboot paper status query failed: {type(exc).__name__}", flush=True)
+        traceback.print_exc()
+        return {"ok": False, "mode": "paper_only", "worker": {"status":"unavailable"},
+                "error":"paper_storage_unavailable", "diagnostic":type(exc).__name__}
 
 
 def run_cycle():
