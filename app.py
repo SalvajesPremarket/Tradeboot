@@ -932,6 +932,9 @@ class Handler(BaseHTTPRequestHandler):
                 details["evaluations"] = evaluated
                 add_check("strategy_evaluation", evaluated > 0, "Evaluaciones en el último ciclo: %s." % evaluated, "warning")
                 details["skipped"] = worker.get("skipped", [])[:30]
+                # Keep Python scanner diagnostics separate: formula-watchlist skips must not hide JeanLong.
+                details["program_skipped"] = worker.get("program_skipped", [])[:100]
+                details["program_skip_reason_counts"] = worker.get("program_skip_reason_counts", {})
                 details["program_scan_source"] = worker.get("program_scan_source")
                 details["program_engine_status"] = worker.get("program_engine_status")
                 details["open_trades"] = int(trade_row[0] or 0)
@@ -940,7 +943,7 @@ class Handler(BaseHTTPRequestHandler):
                 details["recent_actions_24h"] = {str(action): int(count) for action, count in event_rows}
                 skip_counts = {}
                 jean_rejections = []
-                for item in worker.get("skipped", []):
+                for item in worker.get("program_skipped", worker.get("skipped", [])):
                     reason = str(item.get("reason", "unknown"))
                     skip_counts[reason] = skip_counts.get(reason, 0) + 1
                     if reason == "strategy_rejected_or_waiting":
