@@ -251,8 +251,9 @@ def run_cycle():
     capital = get_general_capital()
     evaluated = 0
     skipped = []
+    program_skipped = []
     if active_programs and not program_symbols:
-        skipped.append({"reason": "premarket_candidate_scan_unavailable",
+        program_skipped.append({"reason": "premarket_candidate_scan_unavailable",
                         "detail": "Configure FMP_API_KEY or PAPER_TRADING_SYMBOLS to supply scanner candidates.",
                         "scanner_context_provider": "fmp" if _FMP_API_KEY else "missing_fmp_api_key"})
     # Formula strategies use their explicit eToro watchlist. Reviewed Python
@@ -334,11 +335,11 @@ def run_cycle():
             minute_status, minute_payload = get_price_history(symbol, daily=False)
             daily_status, daily_payload = get_price_history(symbol, daily=True)
             if minute_status != 200 or not minute_payload.get("ok"):
-                skipped.append({"symbol": symbol, "reason": "schwab_minute_history_unavailable",
+                program_skipped.append({"symbol": symbol, "reason": "schwab_minute_history_unavailable",
                                 "status": minute_status, "detail": minute_payload.get("error")})
                 continue
             if daily_status != 200 or not daily_payload.get("ok"):
-                skipped.append({"symbol": symbol, "reason": "schwab_daily_history_unavailable",
+                program_skipped.append({"symbol": symbol, "reason": "schwab_daily_history_unavailable",
                                 "status": daily_status, "detail": daily_payload.get("error")})
                 continue
 
@@ -378,14 +379,14 @@ def run_cycle():
             current_eastern_date = started.astimezone(eastern).date()
             daily_rows = [row for row in daily_rows if row["_stamp"].astimezone(eastern).date() < current_eastern_date]
             if not minute_rows:
-                skipped.append({"symbol": symbol, "reason": "no_completed_minute_candles"})
+                program_skipped.append({"symbol": symbol, "reason": "no_completed_minute_candles"})
                 continue
             # Historical candles initialize indicators only. Do not require a candle
             # from today's session: Schwab may omit premarket/current-session bars.
             # Live entry-pattern ticks are fetched separately below from Schwab quotes.
             seed_rows = [row for row in minute_rows if row["_stamp"] < started]
             if not seed_rows:
-                skipped.append({"symbol": symbol, "reason": "no_historical_seed_candles"})
+                program_skipped.append({"symbol": symbol, "reason": "no_historical_seed_candles"})
                 continue
             # Remove private parsing fields before passing validated OHLCV to the engines.
             seed_candles = [{k:v for k,v in row.items() if not k.startswith("_")} for row in seed_rows[-4000:]]
@@ -397,7 +398,7 @@ def run_cycle():
                 raw_symbol = quote_payload.get("quotes", {}).get(symbol, {})
                 quote = raw_symbol.get("quote", raw_symbol) if isinstance(raw_symbol, dict) else None
             if not isinstance(quote, dict):
-                skipped.append({"symbol": symbol, "reason": "schwab_live_quote_unavailable",
+                program_skipped.append({"symbol": symbol, "reason": "schwab_live_quote_unavailable",
                                 "status": quote_status, "detail": quote_payload.get("error")})
                 continue
             try:
@@ -427,7 +428,7 @@ def run_cycle():
                           price=EXCLUDED.price, day_volume=COALESCE(EXCLUDED.day_volume,tradeboot_market_ticks.day_volume)
                     """, (symbol, live_at.astimezone(timezone.utc), live_price, live_volume))
             except (TypeError, ValueError, OverflowError, OSError):
-                skipped.append({"symbol": symbol, "reason": "schwab_live_quote_stale_or_invalid"})
+                program_skipped.append({"symbol": symbol, "reason": "schwab_live_quote_stale_or_invalid"})
                 continue
 
             # Feed only stored real quote timestamps to JeanLong. Minute candles seed indicators only.
@@ -443,12 +444,12 @@ def run_cycle():
                       "day_volume": float(row[2]) if row[2] is not None else None}
                      for row in tick_rows]
             if not ticks:
-                skipped.append({"symbol": symbol, "reason": "no_persisted_live_ticks"})
+                program_skipped.append({"symbol": symbol, "reason": "no_persisted_live_ticks"})
                 continue
             cumulative_volume = next((tick["day_volume"] for tick in reversed(ticks) if tick["day_volume"] is not None), 0.0)
             daily_candles = [{k:v for k,v in row.items() if not k.startswith("_")} for row in daily_rows[-1000:]]
             if len(daily_candles) < 60:
-                skipped.append({"symbol": symbol, "reason": "insufficient_daily_history",
+                program_skipped.append({"symbol": symbol, "reason": "insufficient_daily_history",
                                 "daily_candles": len(daily_candles)})
                 continue
             daily_volumes = [row["volume"] for row in daily_candles[-30:] if row["volume"] >= 0]
@@ -467,7 +468,7 @@ def run_cycle():
                     from strategy_program_engine import resolve_supported_program
                     spec = resolve_supported_program(strategy["name"], strategy["formula"])
                     if not spec:
-                        skipped.append({"symbol": symbol, "strategy_id": strategy["id"],
+                        program_skipped.append({"symbol": symbol, "strategy_id": strategy["id"],
                                         "reason": "unsupported_reviewed_strategy"})
                         continue
                     module, _class_name, kind = spec
@@ -548,10 +549,10 @@ def run_cycle():
                                     """, (price,pnl,event_time,str(action.get("reason","strategy_exit"))[:160],event_time,trade_id))
                     evaluated += 1
                     if result.get("diagnostics", {}).get("last_reject_reasons"):
-                        skipped.append({"symbol":symbol,"strategy_id":strategy["id"],
+                        program_skipped.append({"symbol":symbol,"strategy_id":strategy["id"],
                                         "reason":"strategy_rejected_or_waiting","diagnostics":result["diagnostics"]["last_reject_reasons"]})
                 except Exception as exc:
-                    skipped.append({"symbol": symbol, "strategy_id": strategy["id"],
+                    program_skipped.append({"symbol": symbol, "strategy_id": strategy["id"],
                                     "reason": "program_replay_failed", "detail": type(exc).__name__})
 
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
@@ -561,7 +562,7 @@ def run_cycle():
                       "active_program_strategies":len(active_programs),
                       "program_engine_status":"schwab_live_ticks_plus_historical_indicator_seed" if active_programs else "idle",
                       "scanner_context_provider":"fmp" if _FMP_API_KEY else "missing_fmp_api_key",
-                      "evaluations":evaluated,"skipped":skipped[:30],
+                      "evaluations":evaluated,"skipped":skipped[:30],\n                      "program_skipped":program_skipped[:100],\n                      "program_skip_reason_counts":{reason:sum(1 for item in program_skipped if item.get("reason")==reason) for reason in sorted({item.get("reason","unknown") for item in program_skipped})},
                       "trading_mode":"paper_only","real_orders_enabled":False})
 
 
