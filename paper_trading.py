@@ -101,7 +101,8 @@ def _fmp_scanner_context(symbol, now):
 
 
 
-_INTERVAL = max(30, int(os.environ.get("PAPER_TRADING_INTERVAL_SECONDS", "60")))
+_INTERVAL = max(5, int(os.environ.get("PAPER_TRADING_INTERVAL_SECONDS", "5")))
+_TICK_MAX_AGE_SECONDS = 30
 _STOP_PCT = max(0.1, min(20.0, float(os.environ.get("PAPER_TRADING_STOP_PCT", "2"))))
 _TAKE_PCT = max(0.1, min(50.0, float(os.environ.get("PAPER_TRADING_TAKE_PCT", "4"))))
 # Formula strategies keep their explicit watchlist. JeanLong uses a separate
@@ -188,6 +189,18 @@ def _init_tables(conn):
             UNIQUE(strategy_id, symbol, action, event_at)
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tradeboot_market_ticks (
+            symbol TEXT NOT NULL,
+            tick_at TIMESTAMPTZ NOT NULL,
+            price DOUBLE PRECISION NOT NULL CHECK (price > 0),
+            day_volume DOUBLE PRECISION,
+            source TEXT NOT NULL DEFAULT 'schwab_quotes',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (symbol, tick_at)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tradeboot_market_ticks_symbol_time ON tradeboot_market_ticks(symbol, tick_at)")
 
 
 def _state(key, value):
@@ -376,11 +389,63 @@ def run_cycle():
             seed_rows = [row for row in minute_rows if row["_stamp"].astimezone(eastern).date() < latest_session]
             # Remove private parsing fields before passing validated OHLCV to the engines.
             seed_candles = [{k:v for k,v in row.items() if not k.startswith("_")} for row in seed_rows[-4000:]]
-            ticks = []
-            cumulative_volume = 0.0
-            for row in session_rows:
-                cumulative_volume += row["volume"]
-                ticks.append({"price": row["close"], "timestamp": row["timestamp"], "day_volume": cumulative_volume})
+            # Capture an actual Schwab quote; historical minute closes are NOT ticks.
+            from schwab_integration import get_quotes
+            quote_status, quote_payload = get_quotes([symbol])
+            quote = None
+            if quote_status == 200 and quote_payload.get("ok"):
+                raw_symbol = quote_payload.get("quotes", {}).get(symbol, {})
+                quote = raw_symbol.get("quote", raw_symbol) if isinstance(raw_symbol, dict) else None
+            if not isinstance(quote, dict):
+                skipped.append({"symbol": symbol, "reason": "schwab_live_quote_unavailable",
+                                "status": quote_status, "detail": quote_payload.get("error")})
+                continue
+            try:
+                live_price = float(quote.get("lastPrice") or quote.get("mark") or 0)
+                raw_stamp = (quote.get("quoteTimeInLong") or quote.get("tradeTimeInLong")
+                             or quote.get("tradeTime") or quote.get("quoteTime"))
+                if isinstance(raw_stamp, str) and not raw_stamp.isdigit():
+                    live_at = datetime.fromisoformat(raw_stamp.replace("Z", "+00:00"))
+                    if live_at.tzinfo is None:
+                        live_at = live_at.replace(tzinfo=timezone.utc)
+                else:
+                    raw_stamp = float(raw_stamp)
+                    live_at = datetime.fromtimestamp(raw_stamp / (1000 if raw_stamp > 10_000_000_000 else 1), timezone.utc)
+                age = (started - live_at.astimezone(timezone.utc)).total_seconds()
+                if live_price <= 0 or not __import__("math").isfinite(live_price) or age < -10 or age > _TICK_MAX_AGE_SECONDS:
+                    raise ValueError("quote_stale_or_invalid")
+                raw_volume = quote.get("totalVolume", quote.get("volume"))
+                live_volume = float(raw_volume) if raw_volume is not None else None
+                if live_volume is not None and (not __import__("math").isfinite(live_volume) or live_volume < 0):
+                    live_volume = None
+                with _connect() as conn:
+                    _init_tables(conn)
+                    conn.execute("""
+                        INSERT INTO tradeboot_market_ticks(symbol,tick_at,price,day_volume,source)
+                        VALUES (%s,%s,%s,%s,'schwab_quotes')
+                        ON CONFLICT(symbol,tick_at) DO UPDATE SET
+                          price=EXCLUDED.price, day_volume=COALESCE(EXCLUDED.day_volume,tradeboot_market_ticks.day_volume)
+                    """, (symbol, live_at.astimezone(timezone.utc), live_price, live_volume))
+            except (TypeError, ValueError, OverflowError, OSError):
+                skipped.append({"symbol": symbol, "reason": "schwab_live_quote_stale_or_invalid"})
+                continue
+
+            # Feed only stored real quote timestamps to JeanLong. Minute candles seed indicators only.
+            day_start = datetime.combine(started.astimezone(eastern).date(), datetime.min.time(), tzinfo=eastern)
+            with _connect() as conn:
+                _init_tables(conn)
+                tick_rows = conn.execute("""
+                    SELECT tick_at,price,day_volume FROM tradeboot_market_ticks
+                    WHERE symbol=%s AND tick_at >= %s AND tick_at <= %s
+                    ORDER BY tick_at ASC LIMIT 5000
+                """, (symbol, day_start.astimezone(timezone.utc), started + timedelta(seconds=10))).fetchall()
+            ticks = [{"price": float(row[1]), "timestamp": row[0].astimezone(timezone.utc).isoformat(),
+                      "day_volume": float(row[2]) if row[2] is not None else None}
+                     for row in tick_rows]
+            if not ticks:
+                skipped.append({"symbol": symbol, "reason": "no_persisted_live_ticks"})
+                continue
+            cumulative_volume = next((tick["day_volume"] for tick in reversed(ticks) if tick["day_volume"] is not None), 0.0)
             daily_candles = [{k:v for k,v in row.items() if not k.startswith("_")} for row in daily_rows[-1000:]]
             if len(daily_candles) < 60:
                 skipped.append({"symbol": symbol, "reason": "insufficient_daily_history",
@@ -494,7 +559,7 @@ def run_cycle():
                       "program_scan_source":"explicit" if _EXPLICIT_PROGRAM_SYMBOLS else ("fmp_biggest_gainers" if _FMP_API_KEY else "missing_fmp_api_key"),
                       "active_formula_strategies":len(active),
                       "active_program_strategies":len(active_programs),
-                      "program_engine_status":"schwab_historical_candles" if active_programs else "idle",
+                      "program_engine_status":"schwab_live_ticks_plus_historical_indicator_seed" if active_programs else "idle",
                       "scanner_context_provider":"fmp" if _FMP_API_KEY else "missing_fmp_api_key",
                       "evaluations":evaluated,"skipped":skipped[:30],
                       "trading_mode":"paper_only","real_orders_enabled":False})
