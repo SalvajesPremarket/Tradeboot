@@ -903,6 +903,8 @@ class Handler(BaseHTTPRequestHandler):
                     add_check("postgresql", True, "Conexión y consulta SELECT 1 correctas.")
                     state_rows = conn.execute("SELECT state_key,state_value,updated_at FROM tradeboot_paper_state").fetchall()
                     tick_row = conn.execute("SELECT COUNT(*), MAX(tick_at) FROM tradeboot_market_ticks WHERE tick_at >= NOW() - INTERVAL '10 minutes'").fetchone()
+                    trade_row = conn.execute("SELECT COUNT(*) FILTER (WHERE status='OPEN'), COUNT(*) FILTER (WHERE status='CLOSED'), COUNT(*) FROM tradeboot_paper_trades").fetchone()
+                    event_rows = conn.execute("SELECT action, COUNT(*) FROM tradeboot_paper_events WHERE event_at >= NOW() - INTERVAL '24 hours' GROUP BY action").fetchall()
                 state = {key: json.loads(value) for key, value, _ in state_rows}
                 worker = state.get("worker", {})
                 details["worker"] = worker
@@ -929,9 +931,29 @@ class Handler(BaseHTTPRequestHandler):
                 evaluated = int(worker.get("evaluations", 0) or 0)
                 details["evaluations"] = evaluated
                 add_check("strategy_evaluation", evaluated > 0, "Evaluaciones en el último ciclo: %s." % evaluated, "warning")
-                details["skipped"] = worker.get("skipped", [])[:15]
+                details["skipped"] = worker.get("skipped", [])[:30]
                 details["program_scan_source"] = worker.get("program_scan_source")
                 details["program_engine_status"] = worker.get("program_engine_status")
+                details["open_trades"] = int(trade_row[0] or 0)
+                details["closed_trades"] = int(trade_row[1] or 0)
+                details["total_trades"] = int(trade_row[2] or 0)
+                details["recent_actions_24h"] = {str(action): int(count) for action, count in event_rows}
+                skip_counts = {}
+                jean_rejections = []
+                for item in worker.get("skipped", []):
+                    reason = str(item.get("reason", "unknown"))
+                    skip_counts[reason] = skip_counts.get(reason, 0) + 1
+                    if reason == "strategy_rejected_or_waiting":
+                        jean_rejections.append({"symbol": item.get("symbol"), "reasons": item.get("diagnostics", [])})
+                details["skip_reason_counts"] = skip_counts
+                details["jeanlong_rejections"] = jean_rejections[:15]
+                # A healthy worker is not proof of a trade signal. Surface no-entry state honestly.
+                if evaluated > 0 and not details["recent_actions_24h"].get("ENTER", 0):
+                    add_check("qualifying_entry_signal", False,
+                              "El motor evaluó estrategias, pero no registró ninguna entrada en las últimas 24 h. Revisa los filtros/rechazos; no se fuerza una operación.", "warning")
+                else:
+                    add_check("qualifying_entry_signal", True,
+                              "Entradas registradas en las últimas 24 h: %s." % details["recent_actions_24h"].get("ENTER", 0), "warning")
                 failures = sum(1 for item in checks if item["status"] == "failed")
                 warnings = sum(1 for item in checks if item["status"] == "warning")
                 overall = "passed" if failures == 0 and warnings == 0 else ("failed" if failures else "needs_attention")
