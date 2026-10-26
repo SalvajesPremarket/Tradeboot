@@ -887,7 +887,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/paper-trading/status":
             try:
                 from paper_trading import get_paper_status
-                return self._json(200, get_paper_status())
+                result = get_paper_status()
+                return self._json(200 if result.get("ok") else 503, result)
             except Exception:
                 return self._json(503, {"ok": False, "mode": "paper_only", "worker": {"status": "unavailable"}})
         if path == "/paper-trading/self-test":
@@ -898,9 +899,12 @@ class Handler(BaseHTTPRequestHandler):
             def add_check(name, passed, detail, severity="error"):
                 checks.append({"name": name, "status": "passed" if passed else ("warning" if severity == "warning" else "failed"), "detail": str(detail)})
             try:
+                from paper_trading import _init_tables
                 with _connect() as conn:
                     conn.execute("SELECT 1").fetchone()
                     add_check("postgresql", True, "Conexión y consulta SELECT 1 correctas.")
+                    # Make the diagnostic safe on fresh databases and after schema upgrades.
+                    _init_tables(conn)
                     state_rows = conn.execute("SELECT state_key,state_value,updated_at FROM tradeboot_paper_state").fetchall()
                     tick_row = conn.execute("SELECT COUNT(*), MAX(tick_at) FROM tradeboot_market_ticks WHERE tick_at >= NOW() - INTERVAL '10 minutes'").fetchone()
                     trade_row = conn.execute("SELECT COUNT(*) FILTER (WHERE status='OPEN'), COUNT(*) FILTER (WHERE status='CLOSED'), COUNT(*) FROM tradeboot_paper_trades").fetchone()
