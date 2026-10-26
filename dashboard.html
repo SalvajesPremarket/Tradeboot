@@ -434,9 +434,11 @@ async function runPaperSelfTest(){
   lines.push('Resultado: '+data.overall+' · Correctos: '+(summary.passed||0)+' · Avisos: '+(summary.warnings||0)+' · Fallos: '+(summary.failed||0));
   lines.push('Origen del escáner: '+(details.program_scan_source||'sin dato')+' · Evaluaciones: '+(details.evaluations??0)+' · Ticks reales recientes: '+(details.recent_tick_count??0));
   lines.push('Operaciones: '+(details.open_trades??0)+' abiertas · '+(details.closed_trades??0)+' cerradas · Acciones de las últimas 24 h: '+JSON.stringify(details.recent_actions_24h||{}));
-  if(details.skip_reason_counts&&Object.keys(details.skip_reason_counts).length)lines.push('Conteo de descartes por motivo: '+JSON.stringify(details.skip_reason_counts));
+  if(details.program_skip_reason_counts&&Object.keys(details.program_skip_reason_counts).length)lines.push('JeanLong · conteo de descartes por motivo: '+JSON.stringify(details.program_skip_reason_counts));
+  if(details.skip_reason_counts&&Object.keys(details.skip_reason_counts).length)lines.push('Conteo de descartes por motivo (escáner general): '+JSON.stringify(details.skip_reason_counts));
   if(Array.isArray(details.jeanlong_rejections)&&details.jeanlong_rejections.length)lines.push('Rechazos de JeanLong: '+details.jeanlong_rejections.slice(0,8).map(x=>x.symbol+': '+(Array.isArray(x.reasons)?x.reasons.join(', '):String(x.reasons))).join(' | '));
-  if(Array.isArray(details.skipped)&&details.skipped.length)lines.push('Últimos descartes: '+details.skipped.slice(0,8).map(x=>x.symbol+': '+x.reason+(x.detail? ' ('+x.detail+')':'')).join(' | '));
+  if(Array.isArray(details.program_skipped)&&details.program_skipped.length)lines.push('Últimos descartes de JeanLong: '+details.program_skipped.slice(0,12).map(x=>x.symbol+': '+x.reason+(x.diagnostics? ' ('+JSON.stringify(x.diagnostics)+')':'')+(x.detail? ' ('+x.detail+')':'')).join(' | '));
+  if(Array.isArray(details.skipped)&&details.skipped.length)lines.push('Últimos descartes del escáner general: '+details.skipped.slice(0,8).map(x=>x.symbol+': '+x.reason+(x.detail? ' ('+x.detail+')':'')).join(' | '));
   output.textContent=lines.join('\n');
  }catch(e){output.textContent='Test no completado: '+e.message}
  finally{button.disabled=false}
