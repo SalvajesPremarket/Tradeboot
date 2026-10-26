@@ -104,10 +104,44 @@ def _fmp_scanner_context(symbol, now):
 _INTERVAL = max(30, int(os.environ.get("PAPER_TRADING_INTERVAL_SECONDS", "60")))
 _STOP_PCT = max(0.1, min(20.0, float(os.environ.get("PAPER_TRADING_STOP_PCT", "2"))))
 _TAKE_PCT = max(0.1, min(50.0, float(os.environ.get("PAPER_TRADING_TAKE_PCT", "4"))))
+# Formula strategies keep their explicit watchlist. JeanLong uses a separate
+# pre-market candidate universe so the default mega-cap symbols cannot silently
+# block its own $1-$20 / low-float scanner filters.
 _SYMBOLS = tuple(dict.fromkeys(
     s.strip().upper() for s in os.environ.get("PAPER_TRADING_SYMBOLS", "AAPL,MSFT,NVDA").split(",")
     if s.strip() and len(s.strip()) <= 20
 ))
+_EXPLICIT_PROGRAM_SYMBOLS = os.environ.get("PAPER_TRADING_SYMBOLS", "").strip()
+
+
+def _program_scan_symbols(now):
+    """Build a bounded candidate list for reviewed Python scanners from FMP gainers."""
+    if _EXPLICIT_PROGRAM_SYMBOLS:
+        return list(_SYMBOLS)
+    if not _FMP_API_KEY:
+        return []
+    rows = _fmp_json("biggest-gainers", {}, "program_scan:biggest-gainers", 60)
+    if not isinstance(rows, list):
+        return []
+    candidates = []
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol or len(symbol) > 20 or not symbol.replace(".", "").replace("-", "").isalnum() or symbol in seen:
+            continue
+        try:
+            price = float(row.get("price"))
+        except (TypeError, ValueError):
+            continue
+        if not (1.0 <= price <= 20.0):
+            continue
+        seen.add(symbol)
+        candidates.append(symbol)
+        if len(candidates) >= 25:
+            break
+    return candidates
 _lock = threading.Lock()
 _thread = None
 
@@ -195,17 +229,22 @@ def get_paper_status():
 
 def run_cycle():
     started = datetime.now(timezone.utc)
-    symbols = list(_SYMBOLS)
+    formula_symbols = list(_SYMBOLS)
     enabled_strategies = [s for s in list_strategies() if s.get("enabled")]
     active = [s for s in enabled_strategies if s.get("strategyType", "formula") == "formula"]
     active_programs = [s for s in enabled_strategies if s.get("strategyType") == "python_program"]
+    program_symbols = _program_scan_symbols(started) if active_programs else []
+    symbols = list(dict.fromkeys(formula_symbols + program_symbols))
     capital = get_general_capital()
     evaluated = 0
     skipped = []
-    # Every enabled reviewed Python strategy is evaluated independently each cycle.
-    # Formula strategies can use eToro snapshots; the four reviewed Python engines
-    # require historical OHLCV and are fed only by Schwab's read-only price-history API.
-    for symbol in symbols:
+    if active_programs and not program_symbols:
+        skipped.append({"reason": "premarket_candidate_scan_unavailable",
+                        "detail": "Configure FMP_API_KEY or PAPER_TRADING_SYMBOLS to supply scanner candidates.",
+                        "scanner_context_provider": "fmp" if _FMP_API_KEY else "missing_fmp_api_key"})
+    # Formula strategies use their explicit eToro watchlist. Reviewed Python
+    # scanners use a separate bounded candidate universe and Schwab history.
+    for symbol in formula_symbols:
         status, market = fetch_market_context(symbol)
         if status != 200 or not market.get("ok") or not market.get("quote_is_usable"):
             skipped.append({"symbol":symbol,"reason":"quote_unusable","status":status,
@@ -278,7 +317,7 @@ def run_cycle():
         from zoneinfo import ZoneInfo
         eastern = ZoneInfo("America/New_York")
         now_minute = started.replace(second=0, microsecond=0)
-        for symbol in symbols:
+        for symbol in program_symbols:
             minute_status, minute_payload = get_price_history(symbol, daily=False)
             daily_status, daily_payload = get_price_history(symbol, daily=True)
             if minute_status != 200 or not minute_payload.get("ok"):
@@ -350,7 +389,7 @@ def run_cycle():
             daily_volumes = [row["volume"] for row in daily_candles[-30:] if row["volume"] >= 0]
             scanner_context = _fmp_scanner_context(symbol, started)
             context = {
-                "prev_close": daily_candles[-2]["close"] if len(daily_candles) >= 2 else None,
+                "prev_close": daily_candles[-1]["close"] if daily_candles else None,
                 "avg_volume_30d": (sum(daily_volumes) / len(daily_volumes)) if daily_volumes else None,
                 "volume_today": cumulative_volume,
                 "float_shares": scanner_context.get("float_shares"),
@@ -451,7 +490,9 @@ def run_cycle():
                                     "reason": "program_replay_failed", "detail": type(exc).__name__})
 
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
-                      "symbols":symbols,"active_formula_strategies":len(active),
+                      "symbols":symbols,"formula_symbols":formula_symbols,"program_scan_symbols":program_symbols,
+                      "program_scan_source":"explicit" if _EXPLICIT_PROGRAM_SYMBOLS else ("fmp_biggest_gainers" if _FMP_API_KEY else "missing_fmp_api_key"),
+                      "active_formula_strategies":len(active),
                       "active_program_strategies":len(active_programs),
                       "program_engine_status":"schwab_historical_candles" if active_programs else "idle",
                       "scanner_context_provider":"fmp" if _FMP_API_KEY else "missing_fmp_api_key",
