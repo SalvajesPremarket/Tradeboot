@@ -380,13 +380,13 @@ def run_cycle():
             if not minute_rows:
                 skipped.append({"symbol": symbol, "reason": "no_completed_minute_candles"})
                 continue
-            latest_session = minute_rows[-1]["_stamp"].astimezone(eastern).date()
-            if latest_session != started.astimezone(eastern).date():
-                skipped.append({"symbol": symbol, "reason": "no_candles_for_current_market_date",
-                                "latest_session": latest_session.isoformat()})
+            # Historical candles initialize indicators only. Do not require a candle
+            # from today's session: Schwab may omit premarket/current-session bars.
+            # Live entry-pattern ticks are fetched separately below from Schwab quotes.
+            seed_rows = [row for row in minute_rows if row["_stamp"] < started]
+            if not seed_rows:
+                skipped.append({"symbol": symbol, "reason": "no_historical_seed_candles"})
                 continue
-            session_rows = [row for row in minute_rows if row["_stamp"].astimezone(eastern).date() == latest_session]
-            seed_rows = [row for row in minute_rows if row["_stamp"].astimezone(eastern).date() < latest_session]
             # Remove private parsing fields before passing validated OHLCV to the engines.
             seed_candles = [{k:v for k,v in row.items() if not k.startswith("_")} for row in seed_rows[-4000:]]
             # Capture an actual Schwab quote; historical minute closes are NOT ticks.
