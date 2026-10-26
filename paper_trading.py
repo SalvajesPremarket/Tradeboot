@@ -384,7 +384,10 @@ def run_cycle():
             current_eastern_date = started.astimezone(eastern).date()
             daily_rows = [row for row in daily_rows if row["_stamp"].astimezone(eastern).date() < current_eastern_date]
             if not minute_rows:
-                program_skipped.append({"symbol": symbol, "reason": "no_completed_minute_candles"})
+                program_skipped.append({"symbol": symbol, "reason": "no_completed_minute_candles",
+                                        "received_candles": len(minute_rows),
+                                        "validated_completed_candles": 0,
+                                        "cycle_minute_utc": started.astimezone(timezone.utc).replace(second=0, microsecond=0).isoformat()})
                 continue
             # Historical candles initialize indicators only. Do not require a candle
             # from today's session: Schwab may omit premarket/current-session bars.
@@ -408,17 +411,38 @@ def run_cycle():
                 continue
             try:
                 live_price = float(quote.get("lastPrice") or quote.get("mark") or 0)
-                raw_stamp = (quote.get("quoteTimeInLong") or quote.get("tradeTimeInLong")
-                             or quote.get("tradeTime") or quote.get("quoteTime"))
-                if isinstance(raw_stamp, str) and not raw_stamp.isdigit():
-                    live_at = datetime.fromisoformat(raw_stamp.replace("Z", "+00:00"))
-                    if live_at.tzinfo is None:
-                        live_at = live_at.replace(tzinfo=timezone.utc)
-                else:
-                    raw_stamp = float(raw_stamp)
-                    live_at = datetime.fromtimestamp(raw_stamp / (1000 if raw_stamp > 10_000_000_000 else 1), timezone.utc)
-                age = (started - live_at.astimezone(timezone.utc)).total_seconds()
-                if live_price <= 0 or not __import__("math").isfinite(live_price) or age < -10 or age > _TICK_MAX_AGE_SECONDS:
+                # Try every available timestamp field: a malformed preferred field must
+                # not hide a valid trade/quote timestamp supplied alongside it.
+                live_at = None
+                timestamp_field = None
+                timestamp_errors = []
+                for field in ("quoteTimeInLong", "tradeTimeInLong", "tradeTime", "quoteTime"):
+                    candidate = quote.get(field)
+                    if candidate is None or candidate == "":
+                        continue
+                    try:
+                        if isinstance(candidate, str) and not candidate.strip().isdigit():
+                            parsed_at = datetime.fromisoformat(candidate.strip().replace("Z", "+00:00"))
+                            if parsed_at.tzinfo is None:
+                                parsed_at = parsed_at.replace(tzinfo=timezone.utc)
+                        else:
+                            stamp = float(candidate)
+                            if not __import__("math").isfinite(stamp) or stamp <= 0:
+                                raise ValueError("invalid_timestamp")
+                            parsed_at = datetime.fromtimestamp(
+                                stamp / (1000 if stamp > 10_000_000_000 else 1), timezone.utc
+                            )
+                        live_at = parsed_at.astimezone(timezone.utc)
+                        timestamp_field = field
+                        break
+                    except (TypeError, ValueError, OverflowError, OSError) as exc:
+                        timestamp_errors.append(field)
+                if live_at is None:
+                    raise ValueError("quote_timestamp_unavailable")
+                age = (started.astimezone(timezone.utc) - live_at).total_seconds()
+                if live_price <= 0 or not __import__("math").isfinite(live_price):
+                    raise ValueError("quote_price_invalid")
+                if age < -10 or age > _TICK_MAX_AGE_SECONDS:
                     raise ValueError("quote_stale_or_invalid")
                 raw_volume = quote.get("totalVolume", quote.get("volume"))
                 live_volume = float(raw_volume) if raw_volume is not None else None
@@ -432,8 +456,17 @@ def run_cycle():
                         ON CONFLICT(symbol,tick_at) DO UPDATE SET
                           price=EXCLUDED.price, day_volume=COALESCE(EXCLUDED.day_volume,tradeboot_market_ticks.day_volume)
                     """, (symbol, live_at.astimezone(timezone.utc), live_price, live_volume))
-            except (TypeError, ValueError, OverflowError, OSError):
-                program_skipped.append({"symbol": symbol, "reason": "schwab_live_quote_stale_or_invalid"})
+            except (TypeError, ValueError, OverflowError, OSError) as exc:
+                diagnostic = {"symbol": symbol, "reason": "schwab_live_quote_stale_or_invalid",
+                              "detail": str(exc)[:80]}
+                if "age" in locals() and isinstance(age, (int, float)):
+                    diagnostic["age_seconds"] = round(age, 1)
+                    diagnostic["max_age_seconds"] = _TICK_MAX_AGE_SECONDS
+                if "timestamp_field" in locals() and timestamp_field:
+                    diagnostic["timestamp_field"] = timestamp_field
+                if "live_at" in locals() and live_at is not None:
+                    diagnostic["quote_timestamp_utc"] = live_at.isoformat()
+                program_skipped.append(diagnostic)
                 continue
 
             # Feed only stored real quote timestamps to JeanLong. Minute candles seed indicators only.
@@ -443,8 +476,10 @@ def run_cycle():
                 tick_rows = conn.execute("""
                     SELECT tick_at,price,day_volume FROM tradeboot_market_ticks
                     WHERE symbol=%s AND tick_at >= %s AND tick_at <= %s
-                    ORDER BY tick_at ASC LIMIT 5000
+                    ORDER BY tick_at DESC LIMIT 5000
                 """, (symbol, day_start.astimezone(timezone.utc), started + timedelta(seconds=10))).fetchall()
+            # SQL selects the newest 5,000 ticks; restore chronological order for engines.
+            tick_rows.reverse()
             ticks = [{"price": float(row[1]), "timestamp": row[0].astimezone(timezone.utc).isoformat(),
                       "day_volume": float(row[2]) if row[2] is not None else None}
                      for row in tick_rows]
