@@ -890,6 +890,54 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, get_paper_status())
             except Exception:
                 return self._json(503, {"ok": False, "mode": "paper_only", "worker": {"status": "unavailable"}})
+        if path == "/paper-trading/self-test":
+            if not self._strategy_admin_authorized():
+                return self._json(403, {"ok": False, "error": "strategy_editor_access_required"})
+            checks = []
+            details = {}
+            def add_check(name, passed, detail, severity="error"):
+                checks.append({"name": name, "status": "passed" if passed else ("warning" if severity == "warning" else "failed"), "detail": str(detail)})
+            try:
+                with _connect() as conn:
+                    conn.execute("SELECT 1").fetchone()
+                    add_check("postgresql", True, "Conexión y consulta SELECT 1 correctas.")
+                    state_rows = conn.execute("SELECT state_key,state_value,updated_at FROM tradeboot_paper_state").fetchall()
+                    tick_row = conn.execute("SELECT COUNT(*), MAX(tick_at) FROM tradeboot_market_ticks WHERE tick_at >= NOW() - INTERVAL '10 minutes'").fetchone()
+                state = {key: json.loads(value) for key, value, _ in state_rows}
+                worker = state.get("worker", {})
+                details["worker"] = worker
+                add_check("paper_only", worker.get("trading_mode", "paper_only") == "paper_only" and worker.get("real_orders_enabled") is False,
+                          "Modo paper_only; órdenes reales deshabilitadas." if worker.get("real_orders_enabled") is False else "No se pudo confirmar que las órdenes reales estén deshabilitadas.")
+                last_cycle = worker.get("last_cycle_at")
+                cycle_age = None
+                if last_cycle:
+                    try:
+                        cycle_age = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(last_cycle.replace("Z", "+00:00"))).total_seconds())
+                    except Exception:
+                        cycle_age = None
+                details["last_cycle_age_seconds"] = cycle_age
+                add_check("worker_cycle", cycle_age is not None and cycle_age <= max(180, int(worker.get("next_cycle_seconds", 5)) * 6),
+                          "Último ciclo hace %s segundos." % (round(cycle_age) if cycle_age is not None else "desconocido"), "warning")
+                enabled = [s for s in list_strategies() if s.get("enabled")]
+                jean = [s for s in enabled if "jeanlong" in str(s.get("name", "")).lower()]
+                add_check("jeanlong_enabled", bool(jean), "JeanLong activa." if jean else "JeanLong no aparece activa en las estrategias guardadas.", "warning")
+                add_check("candidate_scan", bool(worker.get("program_scan_symbols")), "Candidatos configurados: %s." % len(worker.get("program_scan_symbols", [])), "warning")
+                ticks_count, latest_tick = tick_row
+                details["recent_tick_count"] = int(ticks_count or 0)
+                details["latest_tick_at"] = latest_tick.isoformat() if latest_tick else None
+                add_check("live_schwab_ticks", bool(ticks_count), "Cotizaciones reales persistidas en los últimos 10 minutos: %s." % int(ticks_count or 0), "warning")
+                evaluated = int(worker.get("evaluations", 0) or 0)
+                details["evaluations"] = evaluated
+                add_check("strategy_evaluation", evaluated > 0, "Evaluaciones en el último ciclo: %s." % evaluated, "warning")
+                details["skipped"] = worker.get("skipped", [])[:15]
+                details["program_scan_source"] = worker.get("program_scan_source")
+                details["program_engine_status"] = worker.get("program_engine_status")
+                failures = sum(1 for item in checks if item["status"] == "failed")
+                warnings = sum(1 for item in checks if item["status"] == "warning")
+                overall = "passed" if failures == 0 and warnings == 0 else ("failed" if failures else "needs_attention")
+                return self._json(200, {"ok": failures == 0, "overall": overall, "summary": {"passed": sum(1 for x in checks if x["status"] == "passed"), "warnings": warnings, "failed": failures}, "checks": checks, "details": details, "note": "Diagnóstico de solo lectura: no crea operaciones ni envía órdenes reales."})
+            except Exception as exc:
+                return self._json(503, {"ok": False, "overall": "failed", "checks": checks, "error": type(exc).__name__, "note": "El diagnóstico no pudo completar todas las comprobaciones."})
         if path == "/health/database":
             try:
                 with _connect() as conn:

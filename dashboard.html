@@ -64,7 +64,7 @@ button:hover{filter:brightness(1.18);border-color:var(--cyan)}button.secondary{b
 <section class="panel" id="paper-trading-panel" style="margin-top:18px">
   <div class="strategy-head">
     <div><div class="eyebrow">Simulación persistente</div><h2>Paper trading · Resultados</h2><p>Entradas, salidas, stops, motivos y P/L guardados en PostgreSQL. No se envían órdenes reales.</p></div>
-    <button type="button" class="secondary" id="paper-refresh">Actualizar resultados ↻</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="secondary" id="paper-self-test">Ejecutar test completo ✓</button><button type="button" class="secondary" id="paper-refresh">Actualizar resultados ↻</button></div>
   </div>
   <div class="cards" style="margin-top:14px">
     <article class="card"><div class="company">Estado del motor</div><div class="price" style="font-size:20px" id="paper-worker-status">Consultando…</div><div class="quality" id="paper-worker-time">Esperando estado</div></article>
@@ -72,6 +72,7 @@ button:hover{filter:brightness(1.18);border-color:var(--cyan)}button.secondary{b
     <article class="card"><div class="company">P/L realizado acumulado</div><div class="price" style="font-size:24px" id="paper-pnl">—</div><div class="quality">Solo operaciones cerradas</div></article>
   </div>
   <div id="paper-message" class="status-note" role="status" aria-live="polite">Cargando resultados del simulador…</div>
+  <div id="paper-self-test-result" class="status-note" role="status" aria-live="polite" style="margin-top:10px;white-space:pre-wrap">El test revisa base de datos, ciclo del motor, JeanLong, candidatos, ticks reales y evaluaciones. No crea operaciones.</div>
   <div style="overflow-x:auto;margin-top:12px">
     <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:760px">
       <thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--line)">
@@ -420,6 +421,24 @@ async function refreshPaperTrading(){
   $('paper-trades').innerHTML='<tr><td colspan="9" class="empty">Historial no disponible.</td></tr>';
  }finally{if(button)button.disabled=false}
 }
+async function runPaperSelfTest(){
+ const button=$('paper-self-test'),output=$('paper-self-test-result');
+ button.disabled=true;output.textContent='Ejecutando diagnóstico de solo lectura…';
+ try{
+  const response=await fetch('/paper-trading/self-test',{credentials:'same-origin',cache:'no-store'});
+  const data=await response.json();
+  if(!response.ok||!data.checks)throw new Error(data.error==='strategy_editor_access_required'?'Inicia sesión con una cuenta autorizada para ejecutar el test.':data.error||'No se pudo completar el test.');
+  const summary=data.summary||{};
+  const lines=(data.checks||[]).map(item=>(item.status==='passed'?'✓ ':item.status==='warning'?'⚠ ':'✕ ')+item.name+': '+item.detail);
+  const details=data.details||{};
+  lines.push('Resultado: '+data.overall+' · Correctos: '+(summary.passed||0)+' · Avisos: '+(summary.warnings||0)+' · Fallos: '+(summary.failed||0));
+  lines.push('Origen del escáner: '+(details.program_scan_source||'sin dato')+' · Evaluaciones: '+(details.evaluations??0)+' · Ticks reales recientes: '+(details.recent_tick_count??0));
+  if(Array.isArray(details.skipped)&&details.skipped.length)lines.push('Últimos descartes: '+details.skipped.slice(0,5).map(x=>x.symbol+': '+x.reason).join(' | '));
+  output.textContent=lines.join('\n');
+ }catch(e){output.textContent='Test no completado: '+e.message}
+ finally{button.disabled=false}
+}
+$('paper-self-test').addEventListener('click',runPaperSelfTest);
 $('paper-refresh').addEventListener('click',refreshPaperTrading);refreshPaperTrading();setInterval(refreshPaperTrading,30000);
 $('refresh').addEventListener('click',refresh);refresh();setInterval(refresh,30000);
 </script>
