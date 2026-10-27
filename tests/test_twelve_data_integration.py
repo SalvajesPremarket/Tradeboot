@@ -36,6 +36,29 @@ class TwelveDataIntegrationTests(unittest.TestCase):
         request.assert_not_called()
         self.assertEqual(td.get_diagnostics()["market_movers/stocks"]["status"], "skipped_plan_basic")
 
+    def test_basic_plan_uses_schwab_movers_without_calling_twelve_data_paid_endpoint(self):
+        with patch("schwab_integration.get_market_movers") as movers:
+            movers.side_effect = [
+                (200, {"screeners": [
+                    {"symbol": "SMALL", "lastPrice": 4.25, "netPercentChange": 15.0},
+                    {"symbol": "EXPENSIVE", "lastPrice": 35.0, "netPercentChange": 40.0},
+                ]}),
+                (200, {"screeners": [
+                    {"symbol": "OTHER", "lastPrice": 8.0, "netPercentChange": 7.0},
+                ]}),
+            ]
+            with patch.object(td, "_request_json") as request:
+                self.assertEqual(td.get_global_candidates(limit=25), ["SMALL", "OTHER"])
+            request.assert_not_called()
+        self.assertEqual(movers.call_count, 2)
+        self.assertEqual(td.get_symbol_metadata("SMALL")["provider"], "schwab")
+        self.assertEqual(td.get_diagnostics()["market_movers/stocks"]["provider"], "schwab")
+
+    def test_basic_plan_reports_no_candidates_when_schwab_unavailable(self):
+        with patch("schwab_integration.get_market_movers", return_value=(503, {"error": "schwab_authorization_required"})):
+            self.assertEqual(td.get_global_candidates(limit=25), [])
+        self.assertEqual(td.get_diagnostics()["market_movers/stocks"]["status"], "schwab_unavailable")
+
     def test_global_candidates_filter_invalid_prices_and_keep_market_metadata(self):
         td._ENABLE_PAID_ENDPOINTS = True
         payload = {"values": [
