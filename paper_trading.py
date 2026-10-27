@@ -24,10 +24,12 @@ _FMP_API_KEY = (os.environ.get("FMP_API_KEY") or
 _FMP_BASE = "https://financialmodelingprep.com/stable/"
 _FMP_CACHE = {}
 _FMP_CACHE_LOCK = threading.Lock()
+_FMP_DIAGNOSTICS = {}
 
 
 def _fmp_json(endpoint, params, cache_key, ttl_seconds):
     if not _FMP_API_KEY:
+        _FMP_DIAGNOSTICS[endpoint] = {"status": "missing_api_key"}
         return None
     now = time.monotonic()
     with _FMP_CACHE_LOCK:
@@ -40,16 +42,32 @@ def _fmp_json(endpoint, params, cache_key, ttl_seconds):
                       headers={"Accept": "application/json", "User-Agent": "Tradeboot/1.0"},
                       method="GET")
     result = None
+    diagnostic = {"endpoint": endpoint, "status": "request_failed"}
     try:
         with urlopen(request, timeout=6) as response:
+            diagnostic["http_status"] = int(response.status)
             parsed = json.loads(response.read().decode("utf-8"))
             if isinstance(parsed, list):
                 result = parsed
-    except Exception:
-        # Fail closed: missing enrichment means JeanLong rejects the entry.
-        result = None
+                diagnostic["status"] = "ok" if parsed else "empty_list"
+                diagnostic["row_count"] = len(parsed)
+            else:
+                diagnostic["status"] = "unexpected_payload"
+                diagnostic["payload_type"] = type(parsed).__name__
+                if isinstance(parsed, dict):
+                    diagnostic["provider_error_fields"] = [
+                        key for key in ("Error Message", "error", "message", "code")
+                        if key in parsed
+                    ]
+    except Exception as exc:
+        diagnostic["status"] = "request_failed"
+        diagnostic["error_type"] = type(exc).__name__
+        code = getattr(exc, "code", None)
+        if isinstance(code, int):
+            diagnostic["http_status"] = code
     with _FMP_CACHE_LOCK:
         _FMP_CACHE[cache_key] = (now + ttl_seconds, result)
+        _FMP_DIAGNOSTICS[endpoint] = diagnostic
     return result
 
 
@@ -268,9 +286,15 @@ def run_cycle():
     skipped = []
     program_skipped = []
     if active_programs and not program_symbols:
+        scan_diagnostic = dict(_FMP_DIAGNOSTICS.get("biggest-gainers", {}))
+        if not _FMP_API_KEY:
+            scan_diagnostic = {"status": "missing_api_key"}
+        elif not scan_diagnostic:
+            scan_diagnostic = {"status": "not_requested"}
         program_skipped.append({"reason": "premarket_candidate_scan_unavailable",
-                        "detail": "Configure FMP_API_KEY or PAPER_TRADING_SYMBOLS to supply scanner candidates.",
-                        "scanner_context_provider": "fmp" if _FMP_API_KEY else "missing_fmp_api_key"})
+                        "detail": "FMP returned no usable candidates; inspect scanner_diagnostic.",
+                        "scanner_context_provider": "fmp" if _FMP_API_KEY else "missing_fmp_api_key",
+                        "scanner_diagnostic": scan_diagnostic})
     # Formula strategies use their explicit eToro watchlist. Reviewed Python
     # scanners use a separate bounded candidate universe and Schwab history.
     for symbol in formula_symbols:
@@ -630,6 +654,7 @@ def run_cycle():
                       "active_program_strategies":len(active_programs),
                       "program_engine_status":"schwab_live_ticks_plus_historical_indicator_seed" if active_programs else "idle",
                       "scanner_context_provider":"fmp" if _FMP_API_KEY else "missing_fmp_api_key",
+                      "scanner_diagnostic":dict(_FMP_DIAGNOSTICS.get("biggest-gainers", {"status":"missing_api_key"} if not _FMP_API_KEY else {"status":"not_requested"})),
                       "evaluations":evaluated,"skipped":skipped[:30],
                       "program_skipped":program_skipped[:100],
                       "program_skip_reason_counts":{reason:sum(1 for item in program_skipped if item.get("reason")==reason) for reason in sorted({item.get("reason","unknown") for item in program_skipped})},
