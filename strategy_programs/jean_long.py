@@ -170,6 +170,8 @@ class MomentumTrader:
         self.c: dict | None = None
         self.pos: dict | None = None
         self.last_reject: list[str] = []
+        self.last_pattern_state = "waiting_for_pattern"
+        self.last_wait_reason = "sin ticks evaluados"
         self.ctx: dict = {}
         self.day_volume: float | None = None
         self.last_metrics: dict = {}
@@ -228,13 +230,38 @@ class MomentumTrader:
     # ---------------- entrada ----------------
     def _try_enter(self, price, sec, ts, dev) -> list[dict]:
         cfg, c = self.cfg, self.c
-        if (sec > cfg["t1_end"] or c["entered_here"] or c["pattern_inverted"]
-                or c["first_move"] != "adv" or c["adv_dip"] < cfg["min_dip_pct"] or dev < 0):
+        wait_reason = None
+        if sec > cfg["t1_end"]:
+            wait_reason = "fuera del tramo de entrada (0-20 s)"
+        elif c["entered_here"]:
+            wait_reason = "ya hubo entrada en esta vela"
+        elif c["pattern_inverted"]:
+            wait_reason = "patron invertido: subio y luego perdio la apertura"
+        elif c["first_move"] != "adv":
+            wait_reason = "esperando retroceso inicial bajo la apertura"
+        elif c["adv_dip"] < cfg["min_dip_pct"]:
+            wait_reason = "retroceso inicial menor al minimo requerido"
+        elif dev < 0:
+            wait_reason = "precio aun bajo la apertura; falta recuperarla"
+
+        if wait_reason:
+            self.last_pattern_state = "waiting_for_pattern"
+            self.last_wait_reason = wait_reason
+            # Diagnostic snapshot only: this does not authorize an entry or change
+            # the mandatory filters; those still gate the actual entry below.
+            self._scanner_filters(price, ts)
             return []
+
+        self.last_pattern_state = "entry_pattern_detected"
         reasons = self._entry_filters(price, ts)
         self.last_reject = reasons
         if reasons:
+            self.last_pattern_state = "entry_filters_rejected"
+            self.last_wait_reason = "; ".join(reasons)
             return []
+
+        self.last_pattern_state = "entry_triggered"
+        self.last_wait_reason = ""
 
         d = self.d
         extreme = c["low"] if d == 1 else c["high"]
