@@ -570,9 +570,17 @@ def run_cycle():
                     program_skipped.append({"symbol": symbol, "strategy_id": strategy["id"],
                                     "reason": "program_replay_failed", "detail": type(exc).__name__})
 
-    scan_source = ("explicit_program_symbols" if _PROGRAM_SYMBOLS_RAW else
-                   ("explicit" if _EXPLICIT_PROGRAM_SYMBOLS else
-                    ("twelve_data_global_market_movers" if twelve_data_configured() else "missing_twelve_data_api_key")))
+    scan_diagnostic = get_twelve_data_diagnostics().get("market_movers/stocks", {})
+    if _PROGRAM_SYMBOLS_RAW:
+        scan_source = "explicit_program_symbols"
+    elif _EXPLICIT_PROGRAM_SYMBOLS:
+        scan_source = "explicit"
+    elif scan_diagnostic.get("provider") == "schwab":
+        scan_source = "schwab_us_market_movers"
+    elif scan_diagnostic.get("provider") == "twelve_data" and scan_diagnostic.get("status") == "ok":
+        scan_source = "twelve_data_global_market_movers"
+    else:
+        scan_source = "no_candidate_feed"
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
                       "symbols":symbols,"formula_symbols":formula_symbols,"program_scan_symbols":program_symbols,
                       "program_scan_source":scan_source,
