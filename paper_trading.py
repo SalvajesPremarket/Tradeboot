@@ -119,7 +119,7 @@ def _fmp_scanner_context(symbol, now):
 
 
 
-_INTERVAL = max(5, int(os.environ.get("PAPER_TRADING_INTERVAL_SECONDS", "5")))
+_INTERVAL = max(30, int(os.environ.get("PAPER_TRADING_INTERVAL_SECONDS", "30")))
 _TICK_MAX_AGE_SECONDS = 30
 _STOP_PCT = max(0.1, min(20.0, float(os.environ.get("PAPER_TRADING_STOP_PCT", "2"))))
 _TAKE_PCT = max(0.1, min(50.0, float(os.environ.get("PAPER_TRADING_TAKE_PCT", "4"))))
