@@ -133,12 +133,63 @@ def get_global_candidates(now=None, limit=None):
         _DIAGNOSTICS["market_movers/stocks"] = {"status": "missing_api_key", "provider": "twelve_data"}
         return []
     if not _ENABLE_PAID_ENDPOINTS:
-        _DIAGNOSTICS["market_movers/stocks"] = {
-            "status": "skipped_plan_basic",
-            "provider": "twelve_data",
-            "detail": "market_movers_requires_pro_or_venture",
-        }
-        return []
+        # Basic Free cannot call Twelve Data market_movers. Use Schwab's read-only
+        # US exchange movers feed when OAuth/market-data access is available.
+        cache_key = "schwab:movers:us"
+        current = time.monotonic()
+        with _CACHE_LOCK:
+            cached = _CACHE.get(cache_key)
+        if cached and cached[0] > current:
+            return list(cached[1])
+        try:
+            from schwab_integration import get_market_movers
+            merged = {}
+            failures = []
+            for universe in ("NASDAQ", "NYSE"):
+                status, payload = get_market_movers(universe=universe, sort="PERCENT_CHANGE_UP", frequency=0)
+                rows = payload.get("screeners") if status == 200 and isinstance(payload, dict) else None
+                if not isinstance(rows, list):
+                    failures.append(str(payload.get("error", "unavailable")) if isinstance(payload, dict) else "unavailable")
+                    continue
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    symbol = str(row.get("symbol") or "").strip().upper()
+                    try:
+                        price = float(row.get("lastPrice"))
+                        change = float(row.get("netPercentChange"))
+                    except (TypeError, ValueError):
+                        continue
+                    if not _valid_symbol(symbol) or not 1.0 <= price <= 20.0:
+                        continue
+                    item = {
+                        "symbol": symbol, "country": "United States",
+                        "exchange": universe, "price": price,
+                        "percent_change": change, "provider": "schwab",
+                    }
+                    merged[symbol] = item
+            candidates = sorted(merged.values(), key=lambda item: item["percent_change"], reverse=True)
+            with _CACHE_LOCK:
+                for item in candidates:
+                    _SYMBOL_META[item["symbol"]] = item
+                _DIAGNOSTICS["market_movers/stocks"] = {
+                    "status": "ok" if candidates else ("schwab_unavailable" if failures else "no_usable_candidates"),
+                    "provider": "schwab",
+                    "detail": "us_exchange_movers_fallback",
+                    "candidate_count": len(candidates),
+                    "twelve_data_status": "skipped_plan_basic",
+                    "schwab_errors": failures[:2],
+                }
+                _CACHE[cache_key] = (current + 60, candidates)
+            return [item["symbol"] for item in candidates[:max(1, min(50, int(limit or _CANDIDATE_LIMIT)))]]
+        except Exception as exc:
+            _DIAGNOSTICS["market_movers/stocks"] = {
+                "status": "schwab_unavailable",
+                "provider": "schwab",
+                "detail": type(exc).__name__,
+                "twelve_data_status": "skipped_plan_basic",
+            }
+            return []
     countries = _country_list()
     if not countries:
         _DIAGNOSTICS["market_movers/stocks"] = {"status": "no_countries_configured", "provider": "twelve_data"}
