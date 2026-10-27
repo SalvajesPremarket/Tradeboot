@@ -487,7 +487,8 @@ class MomentumTrader:
             elif pub.tzinfo is not None and now.tzinfo is None:
                 now = now.replace(tzinfo=pub.tzinfo)
             age_h = (now - pub).total_seconds() / 3600
-            if age_h > cfg["news_max_age_hours"]:
+            # Reject future-dated headlines instead of treating negative age as fresh news.
+            if age_h < 0 or age_h > cfg["news_max_age_hours"]:
                 continue
             head = n.get("headline", "")
             cat = next((k for k, words in CATALYSTS.items() if any(w in head.lower() for w in words)), None)
