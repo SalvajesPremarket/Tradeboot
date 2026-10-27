@@ -527,10 +527,10 @@ def run_cycle():
                                 side = str(action.get("side", "LONG")).upper()
                                 is_jean_long = strategy.get("name") == "JeanLong"
                                 if is_jean_long and action["action"] == "ENTER":
-                                    # JeanLong may open LONG positions only during US premarket (04:00-09:30 ET).
+                                    # JeanLong may open LONG paper positions from 04:00 until 16:00 New York time.
                                     eastern_event_time = event_time.astimezone(eastern)
                                     premarket_time = eastern_event_time.time()
-                                    if side != "LONG" or not (datetime.strptime("04:00", "%H:%M").time() <= premarket_time < datetime.strptime("09:30", "%H:%M").time()):
+                                    if side != "LONG" or not (datetime.strptime("04:00", "%H:%M").time() <= premarket_time < datetime.strptime("16:00", "%H:%M").time()):
                                         continue
                                 inserted = conn.execute("""
                                     INSERT INTO tradeboot_paper_events(strategy_id,symbol,action,event_at,reason)
