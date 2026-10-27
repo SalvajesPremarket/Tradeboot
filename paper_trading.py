@@ -17,8 +17,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
-# Read-only provider adapters: Schwab is preferred for US listings; Twelve Data supplies
-# global discovery and market data for supported international listings.
+# Read-only provider adapters: automatic candidate discovery is US-only via Schwab
+# NASDAQ/NYSE market movers; Twelve Data is only a fallback for US-symbol market data.
 from twelve_data_integration import (
     get_global_candidates, get_symbol_metadata, get_scanner_context,
     get_price_history as get_twelve_price_history, get_quote as get_twelve_quote,
@@ -48,7 +48,7 @@ _PROGRAM_SYMBOLS = tuple(dict.fromkeys(
 
 
 def _program_scan_symbols(now):
-    """Build a bounded candidate list from Twelve Data's rotating global market-movers feed."""
+    """Build a bounded candidate list from the US-only Schwab market-movers feed."""
     if _PROGRAM_SYMBOLS_RAW:
         return list(_PROGRAM_SYMBOLS)
     if _EXPLICIT_PROGRAM_SYMBOLS:
