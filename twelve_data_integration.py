@@ -83,6 +83,10 @@ def _request_json(endpoint, params=None, cache_key=None, ttl_seconds=60):
     return status, payload
 
 
+def is_configured():
+    return bool(_API_KEY)
+
+
 def get_diagnostics():
     with _CACHE_LOCK:
         return {key: dict(value) for key, value in _DIAGNOSTICS.items()}
