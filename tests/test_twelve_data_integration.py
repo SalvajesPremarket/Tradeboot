@@ -39,6 +39,19 @@ class TwelveDataIntegrationTests(unittest.TestCase):
         self.assertEqual(diagnostic["status"], "schwab_unavailable")
         self.assertEqual(diagnostic["twelve_data_status"], "skipped_plan_basic")
 
+    def test_basic_plan_uses_schwab_even_without_twelve_data_api_key(self):
+        td._API_KEY = ""
+        with patch("schwab_integration.get_market_movers") as movers:
+            movers.side_effect = [
+                (200, {"screeners": [
+                    {"symbol": "SMALL", "lastPrice": 4.25, "netPercentChange": 15.0},
+                ]}),
+                (200, {"screeners": []}),
+            ]
+            self.assertEqual(td.get_global_candidates(limit=25), ["SMALL"])
+        self.assertEqual(movers.call_count, 2)
+        self.assertEqual(td.get_diagnostics()["market_movers/stocks"]["provider"], "schwab")
+
     def test_basic_plan_uses_schwab_movers_without_calling_twelve_data_paid_endpoint(self):
         with patch("schwab_integration.get_market_movers") as movers:
             movers.side_effect = [
