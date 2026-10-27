@@ -373,6 +373,9 @@ def run_cycle():
                 program_skipped.append({"symbol": symbol, "reason": quote_provider + "_live_quote_unavailable",
                                 "status": quote_status, "detail": quote_payload.get("error")})
                 continue
+            # Validate provider timestamps against response-receipt time, not cycle start.
+            # History requests may take several seconds before this live quote is fetched.
+            quote_received_at = datetime.now(timezone.utc)
             age = None
             timestamp_field = None
             live_at = None
@@ -399,7 +402,7 @@ def run_cycle():
                                 stamp / (1000 if stamp > 10_000_000_000 else 1), timezone.utc
                             )
                         parsed_at = parsed_at.astimezone(timezone.utc)
-                        stamp_age = (started.astimezone(timezone.utc) - parsed_at).total_seconds()
+                        stamp_age = (quote_received_at - parsed_at).total_seconds()
                         parsed_stamps.append((parsed_at, field, stamp_age))
                     except (TypeError, ValueError, OverflowError, OSError):
                         continue
@@ -453,7 +456,7 @@ def run_cycle():
                     SELECT tick_at,price,day_volume FROM tradeboot_market_ticks
                     WHERE symbol=%s AND tick_at >= %s AND tick_at <= %s
                     ORDER BY tick_at DESC LIMIT 5000
-                """, (symbol, day_start.astimezone(timezone.utc), started + timedelta(seconds=10))).fetchall()
+                """, (symbol, day_start.astimezone(timezone.utc), quote_received_at + timedelta(seconds=10))).fetchall()
             # SQL selects the newest 5,000 ticks; restore chronological order for engines.
             tick_rows.reverse()
             ticks = [{"price": float(row[1]), "timestamp": row[0].astimezone(timezone.utc).isoformat(),
