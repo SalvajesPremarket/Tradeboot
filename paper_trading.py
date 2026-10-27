@@ -131,10 +131,19 @@ _SYMBOLS = tuple(dict.fromkeys(
     if s.strip() and len(s.strip()) <= 20
 ))
 _EXPLICIT_PROGRAM_SYMBOLS = os.environ.get("PAPER_TRADING_SYMBOLS", "").strip()
+# Optional independent universe for reviewed Python scanners; this does not change
+# the formula-strategy watchlist.
+_PROGRAM_SYMBOLS_RAW = os.environ.get("PAPER_TRADING_PROGRAM_SYMBOLS", "").strip()
+_PROGRAM_SYMBOLS = tuple(dict.fromkeys(
+    s.strip().upper() for s in _PROGRAM_SYMBOLS_RAW.split(",")
+    if s.strip() and len(s.strip()) <= 20
+))
 
 
 def _program_scan_symbols(now):
     """Build a bounded candidate list for reviewed Python scanners from FMP gainers."""
+    if _PROGRAM_SYMBOLS_RAW:
+        return list(_PROGRAM_SYMBOLS)
     if _EXPLICIT_PROGRAM_SYMBOLS:
         return list(_SYMBOLS)
     if not _FMP_API_KEY:
@@ -297,7 +306,7 @@ def run_cycle():
                         "scanner_diagnostic": scan_diagnostic})
     # Formula strategies use their explicit eToro watchlist. Reviewed Python
     # scanners use a separate bounded candidate universe and Schwab history.
-    for symbol in formula_symbols:
+    for symbol in (formula_symbols if active else []):
         status, market = fetch_market_context(symbol)
         if status != 200 or not market.get("ok") or not market.get("quote_is_usable"):
             skipped.append({"symbol":symbol,"reason":"quote_unusable","status":status,
@@ -647,9 +656,12 @@ def run_cycle():
                     program_skipped.append({"symbol": symbol, "strategy_id": strategy["id"],
                                     "reason": "program_replay_failed", "detail": type(exc).__name__})
 
+    scan_source = ("explicit_program_symbols" if _PROGRAM_SYMBOLS_RAW else
+                   ("explicit" if _EXPLICIT_PROGRAM_SYMBOLS else
+                    ("fmp_biggest_gainers" if _FMP_API_KEY else "missing_fmp_api_key")))
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
                       "symbols":symbols,"formula_symbols":formula_symbols,"program_scan_symbols":program_symbols,
-                      "program_scan_source":"explicit" if _EXPLICIT_PROGRAM_SYMBOLS else ("fmp_biggest_gainers" if _FMP_API_KEY else "missing_fmp_api_key"),
+                      "program_scan_source":scan_source,
                       "active_formula_strategies":len(active),
                       "active_program_strategies":len(active_programs),
                       "program_engine_status":"schwab_live_ticks_plus_historical_indicator_seed" if active_programs else "idle",
