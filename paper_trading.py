@@ -17,107 +17,14 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
-# Optional FMP enrichment for the mandatory JeanLong float/news scanner filters.
-# Credentials are read only from Render environment variables and are never logged.
-_FMP_API_KEY = (os.environ.get("FMP_API_KEY") or
-                os.environ.get("FINANCIAL_MODELING_PREP_API_KEY") or "").strip()
-_FMP_BASE = "https://financialmodelingprep.com/stable/"
-_FMP_CACHE = {}
-_FMP_CACHE_LOCK = threading.Lock()
-_FMP_DIAGNOSTICS = {}
-
-
-def _fmp_json(endpoint, params, cache_key, ttl_seconds):
-    if not _FMP_API_KEY:
-        _FMP_DIAGNOSTICS[endpoint] = {"status": "missing_api_key"}
-        return None
-    now = time.monotonic()
-    with _FMP_CACHE_LOCK:
-        cached = _FMP_CACHE.get(cache_key)
-        if cached and cached[0] > now:
-            return cached[1]
-    query = dict(params)
-    query["apikey"] = _FMP_API_KEY
-    request = Request(_FMP_BASE + endpoint + "?" + urlencode(query),
-                      headers={"Accept": "application/json", "User-Agent": "Tradeboot/1.0"},
-                      method="GET")
-    result = None
-    diagnostic = {"endpoint": endpoint, "status": "request_failed"}
-    try:
-        with urlopen(request, timeout=6) as response:
-            diagnostic["http_status"] = int(response.status)
-            parsed = json.loads(response.read().decode("utf-8"))
-            if isinstance(parsed, list):
-                result = parsed
-                diagnostic["status"] = "ok" if parsed else "empty_list"
-                diagnostic["row_count"] = len(parsed)
-            else:
-                diagnostic["status"] = "unexpected_payload"
-                diagnostic["payload_type"] = type(parsed).__name__
-                if isinstance(parsed, dict):
-                    diagnostic["provider_error_fields"] = [
-                        key for key in ("Error Message", "error", "message", "code")
-                        if key in parsed
-                    ]
-    except Exception as exc:
-        diagnostic["status"] = "request_failed"
-        diagnostic["error_type"] = type(exc).__name__
-        code = getattr(exc, "code", None)
-        if isinstance(code, int):
-            diagnostic["http_status"] = code
-    with _FMP_CACHE_LOCK:
-        _FMP_CACHE[cache_key] = (now + ttl_seconds, result)
-        _FMP_DIAGNOSTICS[endpoint] = diagnostic
-    return result
-
-
-def _fmp_scanner_context(symbol, now):
-    """Return only provider-backed float and recent catalyst headlines for one ticker."""
-    if not _FMP_API_KEY:
-        return {"provider": "unconfigured", "float_shares": None, "news": []}
-
-    float_rows = _fmp_json("shares-float", {"symbol": symbol},
-                           "float:" + symbol, 90 * 60)
-    float_shares = None
-    if float_rows:
-        for row in float_rows:
-            if isinstance(row, dict) and str(row.get("symbol", "")).upper() == symbol:
-                raw = row.get("floatShares")
-                if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0:
-                    float_shares = int(raw)
-                    break
-
-    # Batch-by-symbol request is cached for 30 minutes to stay within conservative API limits.
-    today = now.astimezone(ZoneInfo("America/New_York")).date()
-    from_date = (today - timedelta(days=1)).isoformat()
-    to_date = today.isoformat()
-    news_rows = _fmp_json("news/stock", {
-        "symbols": symbol, "from": from_date, "to": to_date, "limit": 50, "page": 0,
-    }, "news:" + symbol, 30 * 60)
-    news = []
-    if news_rows:
-        for row in news_rows:
-            if not isinstance(row, dict):
-                continue
-            row_symbol = str(row.get("symbol", symbol)).upper()
-            if row_symbol and row_symbol != symbol:
-                continue
-            headline = row.get("title") or row.get("headline")
-            published = row.get("publishedDate") or row.get("published_at")
-            if not isinstance(headline, str) or not isinstance(published, str):
-                continue
-            try:
-                stamp = datetime.fromisoformat(published.replace("Z", "+00:00"))
-                if stamp.tzinfo is None:
-                    # FMP news timestamps without offsets are interpreted in New York time.
-                    stamp = stamp.replace(tzinfo=ZoneInfo("America/New_York"))
-                stamp = stamp.astimezone(timezone.utc)
-            except (TypeError, ValueError, OverflowError):
-                continue
-            news.append({"published_at": stamp, "headline": headline[:500]})
-    return {"provider": "fmp", "float_shares": float_shares, "news": news}
-
-
+# Read-only provider adapters: Schwab is preferred for US listings; Twelve Data supplies
+# global discovery and market data for supported international listings.
+from twelve_data_integration import (
+    get_global_candidates, get_symbol_metadata, get_scanner_context,
+    get_price_history as get_twelve_price_history, get_quote as get_twelve_quote,
+    get_diagnostics as get_twelve_data_diagnostics,
+    is_configured as twelve_data_configured,
+)
 
 _INTERVAL = max(30, int(os.environ.get("PAPER_TRADING_INTERVAL_SECONDS", "30")))
 _TICK_MAX_AGE_SECONDS = 30
@@ -141,35 +48,14 @@ _PROGRAM_SYMBOLS = tuple(dict.fromkeys(
 
 
 def _program_scan_symbols(now):
-    """Build a bounded candidate list for reviewed Python scanners from FMP gainers."""
+    """Build a bounded candidate list from Twelve Data's rotating global market-movers feed."""
     if _PROGRAM_SYMBOLS_RAW:
         return list(_PROGRAM_SYMBOLS)
     if _EXPLICIT_PROGRAM_SYMBOLS:
         return list(_SYMBOLS)
-    if not _FMP_API_KEY:
-        return []
-    rows = _fmp_json("biggest-gainers", {}, "program_scan:biggest-gainers", 60)
-    if not isinstance(rows, list):
-        return []
-    candidates = []
-    seen = set()
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        symbol = str(row.get("symbol") or "").strip().upper()
-        if not symbol or len(symbol) > 20 or not symbol.replace(".", "").replace("-", "").isalnum() or symbol in seen:
-            continue
-        try:
-            price = float(row.get("price"))
-        except (TypeError, ValueError):
-            continue
-        if not (1.0 <= price <= 20.0):
-            continue
-        seen.add(symbol)
-        candidates.append(symbol)
-        if len(candidates) >= 25:
-            break
-    return candidates
+    return get_global_candidates(now=now, limit=25)
+
+
 _lock = threading.Lock()
 _thread = None
 
@@ -295,15 +181,16 @@ def run_cycle():
     skipped = []
     program_skipped = []
     if active_programs and not program_symbols:
-        scan_diagnostic = dict(_FMP_DIAGNOSTICS.get("biggest-gainers", {}))
-        if not _FMP_API_KEY:
-            scan_diagnostic = {"status": "missing_api_key"}
-        elif not scan_diagnostic:
-            scan_diagnostic = {"status": "not_requested"}
-        program_skipped.append({"reason": "premarket_candidate_scan_unavailable",
-                        "detail": "FMP returned no usable candidates; inspect scanner_diagnostic.",
-                        "scanner_context_provider": "fmp" if _FMP_API_KEY else "missing_fmp_api_key",
-                        "scanner_diagnostic": scan_diagnostic})
+        scan_diagnostic = dict(get_twelve_data_diagnostics().get(
+            "market_movers/stocks",
+            {"status": "missing_api_key" if not twelve_data_configured() else "no_usable_candidates"},
+        ))
+        program_skipped.append({
+            "reason": "global_candidate_scan_unavailable",
+            "detail": "Twelve Data returned no usable global candidates; inspect scanner_diagnostic.",
+            "scanner_context_provider": "twelve_data" if twelve_data_configured() else "missing_twelve_data_api_key",
+            "scanner_diagnostic": scan_diagnostic,
+        })
     # Formula strategies use their explicit eToro watchlist. Reviewed Python
     # scanners use a separate bounded candidate universe and Schwab history.
     for symbol in (formula_symbols if active else []):
@@ -375,19 +262,35 @@ def run_cycle():
                                price*(1+_TAKE_PCT/100),started,quote_at))
 
     if active_programs:
-        from schwab_integration import get_price_history
+        from schwab_integration import get_price_history as get_schwab_price_history
         from zoneinfo import ZoneInfo
         eastern = ZoneInfo("America/New_York")
         now_minute = started.replace(second=0, microsecond=0)
         for symbol in program_symbols:
-            minute_status, minute_payload = get_price_history(symbol, daily=False)
-            daily_status, daily_payload = get_price_history(symbol, daily=True)
+            symbol_meta = get_symbol_metadata(symbol)
+            country = str(symbol_meta.get("country", "")).strip().lower()
+            is_us_listing = not symbol_meta or country in ("us", "usa", "united states")
+            history_provider = "schwab" if is_us_listing else "twelve_data"
+            if is_us_listing:
+                minute_status, minute_payload = get_schwab_price_history(symbol, daily=False)
+                daily_status, daily_payload = get_schwab_price_history(symbol, daily=True)
+                if ((minute_status != 200 or not minute_payload.get("ok") or daily_status != 200 or not daily_payload.get("ok"))
+                    and twelve_data_configured()):
+                    td_minute_status, td_minute_payload = get_twelve_price_history(symbol, daily=False, metadata=symbol_meta)
+                    td_daily_status, td_daily_payload = get_twelve_price_history(symbol, daily=True, metadata=symbol_meta)
+                    if td_minute_status == 200 and td_minute_payload.get("ok") and td_daily_status == 200 and td_daily_payload.get("ok"):
+                        minute_status, minute_payload = td_minute_status, td_minute_payload
+                        daily_status, daily_payload = td_daily_status, td_daily_payload
+                        history_provider = "twelve_data"
+            else:
+                minute_status, minute_payload = get_twelve_price_history(symbol, daily=False, metadata=symbol_meta)
+                daily_status, daily_payload = get_twelve_price_history(symbol, daily=True, metadata=symbol_meta)
             if minute_status != 200 or not minute_payload.get("ok"):
-                program_skipped.append({"symbol": symbol, "reason": "schwab_minute_history_unavailable",
+                program_skipped.append({"symbol": symbol, "reason": history_provider + "_minute_history_unavailable",
                                 "status": minute_status, "detail": minute_payload.get("error")})
                 continue
             if daily_status != 200 or not daily_payload.get("ok"):
-                program_skipped.append({"symbol": symbol, "reason": "schwab_daily_history_unavailable",
+                program_skipped.append({"symbol": symbol, "reason": history_provider + "_daily_history_unavailable",
                                 "status": daily_status, "detail": daily_payload.get("error")})
                 continue
 
@@ -441,15 +344,26 @@ def run_cycle():
                 continue
             # Remove private parsing fields before passing validated OHLCV to the engines.
             seed_candles = [{k:v for k,v in row.items() if not k.startswith("_")} for row in seed_rows[-4000:]]
-            # Capture an actual Schwab quote; historical minute closes are NOT ticks.
-            from schwab_integration import get_quotes
-            quote_status, quote_payload = get_quotes([symbol])
+            # Capture a provider quote; historical minute closes are NOT live ticks.
             quote = None
-            if quote_status == 200 and quote_payload.get("ok"):
-                raw_symbol = quote_payload.get("quotes", {}).get(symbol, {})
-                quote = raw_symbol.get("quote", raw_symbol) if isinstance(raw_symbol, dict) else None
+            quote_provider = history_provider
+            quote_status, quote_payload = 503, {"error": "quote_not_requested"}
+            if history_provider == "schwab":
+                from schwab_integration import get_quotes
+                quote_status, quote_payload = get_quotes([symbol])
+                if quote_status == 200 and quote_payload.get("ok"):
+                    raw_symbol = quote_payload.get("quotes", {}).get(symbol, {})
+                    quote = raw_symbol.get("quote", raw_symbol) if isinstance(raw_symbol, dict) else None
+                if not isinstance(quote, dict) and twelve_data_configured():
+                    quote_status, quote_payload = get_twelve_quote(symbol, metadata=symbol_meta)
+                    quote = quote_payload.get("quote") if quote_status == 200 and quote_payload.get("ok") else None
+                    if isinstance(quote, dict):
+                        quote_provider = "twelve_data"
+            else:
+                quote_status, quote_payload = get_twelve_quote(symbol, metadata=symbol_meta)
+                quote = quote_payload.get("quote") if quote_status == 200 and quote_payload.get("ok") else None
             if not isinstance(quote, dict):
-                program_skipped.append({"symbol": symbol, "reason": "schwab_live_quote_unavailable",
+                program_skipped.append({"symbol": symbol, "reason": quote_provider + "_live_quote_unavailable",
                                 "status": quote_status, "detail": quote_payload.get("error")})
                 continue
             age = None
@@ -501,12 +415,12 @@ def run_cycle():
                     _init_tables(conn)
                     conn.execute("""
                         INSERT INTO tradeboot_market_ticks(symbol,tick_at,price,day_volume,source)
-                        VALUES (%s,%s,%s,%s,'schwab_quotes')
+                        VALUES (%s,%s,%s,%s,%s)
                         ON CONFLICT(symbol,tick_at) DO UPDATE SET
                           price=EXCLUDED.price, day_volume=COALESCE(EXCLUDED.day_volume,tradeboot_market_ticks.day_volume)
-                    """, (symbol, live_at.astimezone(timezone.utc), live_price, live_volume))
+                    """, (symbol, live_at.astimezone(timezone.utc), live_price, live_volume, "twelve_data_quotes" if quote_provider == "twelve_data" else "schwab_quotes"))
             except (TypeError, ValueError, OverflowError, OSError) as exc:
-                diagnostic = {"symbol": symbol, "reason": "schwab_live_quote_stale_or_invalid",
+                diagnostic = {"symbol": symbol, "reason": quote_provider + "_live_quote_stale_or_invalid",
                               "detail": str(exc)[:80]}
                 if "age" in locals() and isinstance(age, (int, float)):
                     diagnostic["age_seconds"] = round(age, 1)
@@ -542,7 +456,7 @@ def run_cycle():
                                 "daily_candles": len(daily_candles)})
                 continue
             daily_volumes = [row["volume"] for row in daily_candles[-30:] if row["volume"] >= 0]
-            scanner_context = _fmp_scanner_context(symbol, started)
+            scanner_context = get_scanner_context(symbol, started, symbol_meta)
             context = {
                 "prev_close": daily_candles[-1]["close"] if daily_candles else None,
                 "avg_volume_30d": (sum(daily_volumes) / len(daily_volumes)) if daily_volumes else None,
@@ -656,17 +570,25 @@ def run_cycle():
                     program_skipped.append({"symbol": symbol, "strategy_id": strategy["id"],
                                     "reason": "program_replay_failed", "detail": type(exc).__name__})
 
-    scan_source = ("explicit_program_symbols" if _PROGRAM_SYMBOLS_RAW else
-                   ("explicit" if _EXPLICIT_PROGRAM_SYMBOLS else
-                    ("fmp_biggest_gainers" if _FMP_API_KEY else "missing_fmp_api_key")))
+    scan_diagnostic = get_twelve_data_diagnostics().get("market_movers/stocks", {})
+    if _PROGRAM_SYMBOLS_RAW:
+        scan_source = "explicit_program_symbols"
+    elif _EXPLICIT_PROGRAM_SYMBOLS:
+        scan_source = "explicit"
+    elif scan_diagnostic.get("provider") == "schwab":
+        scan_source = "schwab_us_market_movers"
+    elif scan_diagnostic.get("provider") == "twelve_data" and scan_diagnostic.get("status") == "ok":
+        scan_source = "twelve_data_global_market_movers"
+    else:
+        scan_source = "no_candidate_feed"
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
                       "symbols":symbols,"formula_symbols":formula_symbols,"program_scan_symbols":program_symbols,
                       "program_scan_source":scan_source,
                       "active_formula_strategies":len(active),
                       "active_program_strategies":len(active_programs),
-                      "program_engine_status":"schwab_live_ticks_plus_historical_indicator_seed" if active_programs else "idle",
-                      "scanner_context_provider":"fmp" if _FMP_API_KEY else "missing_fmp_api_key",
-                      "scanner_diagnostic":dict(_FMP_DIAGNOSTICS.get("biggest-gainers", {"status":"missing_api_key"} if not _FMP_API_KEY else {"status":"not_requested"})),
+                      "program_engine_status":"provider_live_ticks_plus_historical_indicator_seed" if active_programs else "idle",
+                      "scanner_context_provider":"twelve_data" if twelve_data_configured() else "missing_twelve_data_api_key",
+                      "scanner_diagnostic":dict(get_twelve_data_diagnostics().get("market_movers/stocks", {"status":"missing_api_key"} if not twelve_data_configured() else {"status":"not_requested"})),
                       "evaluations":evaluated,"skipped":skipped[:30],
                       "program_skipped":program_skipped[:100],
                       "program_skip_reason_counts":{reason:sum(1 for item in program_skipped if item.get("reason")==reason) for reason in sorted({item.get("reason","unknown") for item in program_skipped})},

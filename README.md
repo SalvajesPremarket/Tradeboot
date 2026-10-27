@@ -31,6 +31,18 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 - La clave de cifrado `SCHWAB_TOKEN_ENCRYPTION_KEY` debe ser una clave Fernet válida. El token cifrado persistido permite guardar las rotaciones del refresh token sin depender de editar variables en cada renovación.
 - La aplicación debe estar aprobada por Schwab y tener permisos de Market Data antes de que OAuth y las cotizaciones puedan funcionar.
 
+## Schwab + Twelve Data (escáner global en paper trading)
+
+- Schwab sigue siendo el proveedor preferido de cotizaciones e históricos para acciones de EE. UU.; las órdenes de Schwab no se usan.
+- `TWELVE_DATA_API_KEY` configura la API de Twelve Data. `TWELVE_DATA_MARKET_COUNTRIES` es opcional y solo se usa para la rotación de mercados cuando la cuenta tiene acceso al endpoint de ganadores.
+- `/market_movers/stocks` consume 100 créditos por solicitud y requiere Pro (individual) o Venture (empresa). Para proteger una cuenta Basic Free, los endpoints de pago `market_movers/stocks` y `statistics` quedan desactivados por defecto y se registran como omitidos en el diagnóstico.
+- Solo activar `TWELVE_DATA_ENABLE_PAID_ENDPOINTS=true` después de confirmar que el plan contratado permite esos endpoints y se acepta su consumo de créditos. No activar esa variable en Basic Free.
+- Con Basic Free, `market_movers/stocks` queda desactivado. El motor intenta usar los movers de NASDAQ y NYSE de Schwab como alternativa de EE. UU. (solo si OAuth y Market Data están autorizados), filtrando candidatos de $1–$20. Esto no es cobertura global: para mercados internacionales se puede definir `PAPER_TRADING_PROGRAM_SYMBOLS` con símbolos explícitos permitidos por el plan; eso es una watchlist fija, no un escaneo global automático.
+- Para acciones de EE. UU. se intenta Schwab primero y Twelve Data sirve de respaldo cuando está configurado. El acceso a precios e históricos de Twelve Data depende del símbolo y del mercado habilitados en la cuenta.
+- El estado de `/paper-trading/status` registra la fuente real del escaneo (`schwab_us_market_movers`, `twelve_data_global_market_movers`, watchlist explícita o `no_candidate_feed`) para no presentar una fuente no disponible como activa.
+- El contexto de *float* solo se acepta si el proveedor devuelve un campo explícito de float; las acciones en circulación no se confunden con float. Con Basic Free, *float* no se solicita a través de `statistics`; las reglas obligatorias de JeanLong no se desactivan si falta float o una noticia fresca.
+- No incluir la API key en el repositorio ni en los logs; añadirla como secreto de entorno en Render.
+
 ## Endpoints
 
 - `GET /health` — comprobación de salud.
