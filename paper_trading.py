@@ -567,8 +567,10 @@ def run_cycle():
                         program_skipped.append({"symbol":symbol,"strategy_id":strategy["id"],
                                         "reason":"strategy_rejected_or_waiting","diagnostics":result["diagnostics"]["last_reject_reasons"]})
                 except Exception as exc:
+                    # Preserve validation details without exposing credentials or stopping other symbols.
                     program_skipped.append({"symbol": symbol, "strategy_id": strategy["id"],
-                                    "reason": "program_replay_failed", "detail": type(exc).__name__})
+                                    "reason": "program_replay_failed", "detail": type(exc).__name__,
+                                    "message": str(exc)[:180]})
 
     scan_diagnostic = get_twelve_data_diagnostics().get("market_movers/stocks", {})
     if _PROGRAM_SYMBOLS_RAW:
