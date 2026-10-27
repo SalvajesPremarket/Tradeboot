@@ -141,8 +141,13 @@ def get_global_candidates(now=None, limit=None):
         with _CACHE_LOCK:
             cached = _CACHE.get(cache_key)
         if cached and cached[0] > current:
-            # The cache stores candidate metadata dictionaries; the worker expects symbols.
-            return [item["symbol"] for item in cached[1] if isinstance(item, dict) and item.get("symbol")]
+            # Apply the same bound to cached and freshly fetched candidates.
+            # Otherwise a full cache can bypass the free-plan cycle limit.
+            cached_symbols = [
+                item["symbol"] for item in cached[1]
+                if isinstance(item, dict) and item.get("symbol")
+            ]
+            return cached_symbols[:max(1, min(50, int(limit or _CANDIDATE_LIMIT)))]
         try:
             from schwab_integration import get_market_movers
             merged = {}
