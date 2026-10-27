@@ -427,7 +427,7 @@ def get_scanner_context(symbol, now=None, metadata=None):
                 published = row.get("published_at") or row.get("publishedDate") or row.get("datetime") or row.get("date")
                 stamp = _parse_timestamp(published)
                 if isinstance(headline, str) and stamp:
-                    news_rows.append({"published_at": stamp, "headline": headline[:500]})
+                    news_rows.append({"published_at": stamp.isoformat(), "headline": headline[:500]})
     diagnostic = {
         "status": "ok" if news_status == 200 else "press_releases_unavailable",
         "float_available": float_shares is not None,
