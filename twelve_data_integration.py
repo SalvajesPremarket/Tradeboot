@@ -449,8 +449,8 @@ def _fmp_news(symbol):
         if not isinstance(item, dict):
             continue
         item_symbol = str(item.get("symbol") or "").strip().upper()
-        # Do not attach broad market headlines to a ticker unless FMP tags that ticker.
-        if item_symbol and item_symbol != str(symbol).upper():
+        # Attach only headlines explicitly tagged for this ticker.
+        if item_symbol != str(symbol).upper():
             continue
         headline = item.get("title") or item.get("headline")
         stamp = _parse_timestamp(item.get("publishedDate") or item.get("published_at") or item.get("date"))
