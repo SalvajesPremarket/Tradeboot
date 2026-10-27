@@ -180,6 +180,7 @@ def run_cycle():
     evaluated = 0
     skipped = []
     program_skipped = []
+    program_evaluations = []
     if active_programs and not program_symbols:
         scan_diagnostic = dict(get_twelve_data_diagnostics().get(
             "market_movers/stocks",
@@ -483,6 +484,15 @@ def run_cycle():
                     if kind == "pullback":
                         payload["daily_candles"] = daily_candles
                     result = simulate_program(payload)
+                    result_diagnostics = result.get("diagnostics", {})
+                    program_evaluations.append({
+                        "symbol": symbol,
+                        "strategy_id": strategy["id"],
+                        "actions_generated": len(result.get("actions", [])),
+                        "last_reject_reasons": result_diagnostics.get("last_reject_reasons", []),
+                        "last_metrics": result_diagnostics.get("last_metrics", {}),
+                        "scanner_context_diagnostic": scanner_context.get("diagnostic", {}),
+                    })
                     new_actions = 0
                     with _connect() as conn:
                         _init_tables(conn)
@@ -593,6 +603,7 @@ def run_cycle():
                       "scanner_diagnostic":dict(get_twelve_data_diagnostics().get("market_movers/stocks", {"status":"missing_api_key"} if not twelve_data_configured() else {"status":"not_requested"})),
                       "evaluations":evaluated,"skipped":skipped[:30],
                       "program_skipped":program_skipped[:100],
+                      "program_evaluations":program_evaluations[:100],
                       "program_skip_reason_counts":{reason:sum(1 for item in program_skipped if item.get("reason")==reason) for reason in sorted({item.get("reason","unknown") for item in program_skipped})},
                       "trading_mode":"paper_only","real_orders_enabled":False})
 
