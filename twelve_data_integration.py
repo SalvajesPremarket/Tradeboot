@@ -16,11 +16,12 @@ from urllib.request import Request, urlopen
 API_BASE = "https://api.twelvedata.com"
 TIMEOUT_SECONDS = 12
 _API_KEY = (os.environ.get("TWELVE_DATA_API_KEY") or "").strip()
-_COUNTRIES_RAW = os.environ.get(
-    "TWELVE_DATA_MARKET_COUNTRIES",
-    "United States,Canada,United Kingdom,India,Australia,Germany,Japan,France,Hong Kong,Singapore,Brazil,South Africa",
-)
+_COUNTRIES_RAW = os.environ.get("TWELVE_DATA_MARKET_COUNTRIES", "").strip()
 _COUNTRIES = tuple(dict.fromkeys(item.strip() for item in _COUNTRIES_RAW.split(",") if item.strip()))
+_FALLBACK_COUNTRIES = (
+    "United States", "Canada", "United Kingdom", "India", "Australia", "Germany",
+    "Japan", "France", "Hong Kong", "Singapore", "Brazil", "South Africa",
+)
 _CANDIDATE_LIMIT = max(1, min(50, int(os.environ.get("TWELVE_DATA_CANDIDATE_LIMIT", "25"))))
 _CACHE = {}
 _CACHE_LOCK = threading.RLock()
@@ -102,18 +103,40 @@ def _valid_symbol(value):
     return isinstance(value, str) and bool(re.fullmatch(r"[A-Z0-9._-]{1,20}", value.strip().upper()))
 
 
+def _country_list():
+    """Use all countries in Twelve Data's exchange catalog unless explicitly restricted."""
+    if _COUNTRIES:
+        return _COUNTRIES
+    status, payload = _request_json("exchanges", {"type": "Common Stock"}, "exchanges:common_stock", 86400)
+    rows = payload.get("data") if status == 200 and isinstance(payload, dict) else None
+    countries = []
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict) and isinstance(row.get("country"), str):
+                country = row["country"].strip()
+                if country and country not in countries:
+                    countries.append(country)
+    if countries:
+        # Begin with the US, then rotate across the rest of the provider's exchange countries.
+        us = [country for country in countries if country.lower() in ("us", "usa", "united states")]
+        rest = sorted(country for country in countries if country not in us)
+        return tuple(us[:1] + rest)
+    return _FALLBACK_COUNTRIES
+
+
 def get_global_candidates(now=None, limit=None):
-    """Rotate market-mover requests across configured countries and return cached global gainers."""
+    """Rotate market-mover requests across exchange countries and return cached global gainers."""
     global _COUNTRY_CURSOR
     if not _API_KEY:
         _DIAGNOSTICS["market_movers/stocks"] = {"status": "missing_api_key", "provider": "twelve_data"}
         return []
-    if not _COUNTRIES:
+    countries = _country_list()
+    if not countries:
         _DIAGNOSTICS["market_movers/stocks"] = {"status": "no_countries_configured", "provider": "twelve_data"}
         return []
 
     with _CACHE_LOCK:
-        country = _COUNTRIES[_COUNTRY_CURSOR % len(_COUNTRIES)]
+        country = countries[_COUNTRY_CURSOR % len(countries)]
         _COUNTRY_CURSOR += 1
     cache_key = "movers:" + country.lower()
     status, payload = _request_json(
@@ -163,7 +186,7 @@ def get_global_candidates(now=None, limit=None):
     merged = {}
     with _CACHE_LOCK:
         for country_name, (fetched_at, cached_rows) in list(_COUNTRY_ROWS.items()):
-            if current - fetched_at > 1800:
+            if current - fetched_at > 7200:
                 continue
             for item in cached_rows:
                 symbol = item["symbol"]
@@ -222,9 +245,6 @@ def get_quote(symbol, metadata=None):
     if not _valid_symbol(symbol):
         return 400, {"ok": False, "error": "invalid_symbol", "provider": "twelve_data"}
     params = _request_params_for_symbol(symbol, metadata)
-    meta = metadata or get_symbol_metadata(symbol)
-    if str(meta.get("country", "")).strip().lower() in ("us", "usa", "united states"):
-        params["prepost"] = "true"
     cache_key = "quote:" + str(symbol).upper() + ":" + str(params.get("exchange", "")) + ":" + str(params.get("country", ""))
     status, payload = _request_json("quote", params, cache_key, 10)
     if status != 200 or not isinstance(payload, dict):
