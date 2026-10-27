@@ -172,11 +172,19 @@ def _init_tables(conn):
             entry_at TIMESTAMPTZ NOT NULL,
             exit_at TIMESTAMPTZ,
             exit_reason TEXT,
-            last_quote_at TIMESTAMPTZ
+            last_quote_at TIMESTAMPTZ,
+            order_type TEXT,
+            time_in_force TEXT,
+            extended_hours BOOLEAN,
+            limit_price DOUBLE PRECISION
         )
     """)
     conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS side TEXT NOT NULL DEFAULT 'LONG'")
     conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS last_quote_at TIMESTAMPTZ")
+    conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS order_type TEXT")
+    conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS time_in_force TEXT")
+    conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS extended_hours BOOLEAN")
+    conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS limit_price DOUBLE PRECISION")
     conn.execute("CREATE INDEX IF NOT EXISTS tradeboot_paper_trades_status_idx ON tradeboot_paper_trades(status, strategy_id, symbol)")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS tradeboot_paper_events (
@@ -222,7 +230,8 @@ def get_paper_status():
             rows = conn.execute("SELECT state_key,state_value,updated_at FROM tradeboot_paper_state").fetchall()
             trades = conn.execute("""
                 SELECT id,strategy_id,strategy_name,symbol,status,entry_price,exit_price,quantity,
-                       allocated_usd,stop_price,take_price,pnl_usd,entry_at,exit_at,exit_reason,side
+                       allocated_usd,stop_price,take_price,pnl_usd,entry_at,exit_at,exit_reason,side,
+                       order_type,time_in_force,extended_hours,limit_price
                 FROM tradeboot_paper_trades ORDER BY id DESC LIMIT 50
             """).fetchall()
             counts = conn.execute("""
@@ -236,7 +245,8 @@ def get_paper_status():
                 "trades": [{"id":r[0],"strategy_id":r[1],"strategy_name":r[2],"symbol":r[3],"status":r[4],
                   "entry_price":r[5],"exit_price":r[6],"quantity":r[7],"allocated_usd":r[8],"stop_price":r[9],
                   "take_price":r[10],"pnl_usd":r[11],"entry_at":r[12].isoformat(),"exit_at":r[13].isoformat() if r[13] else None,
-                  "exit_reason":r[14],"side":r[15]} for r in trades]}
+                  "exit_reason":r[14],"side":r[15],"order_type":r[16],"time_in_force":r[17],
+                  "extended_hours":r[18],"limit_price":r[19]} for r in trades]}
     except Exception as exc:
         # Keep the UI message safe while making the failure class diagnosable in Render logs/API.
         print(f"Tradeboot paper status query failed: {type(exc).__name__}", flush=True)
@@ -540,6 +550,13 @@ def run_cycle():
                                         event_time = event_time.replace(tzinfo=timezone.utc)
                                 except (TypeError, ValueError):
                                     continue
+                                is_jean_long = strategy.get("name") == "JeanLong"
+                                if is_jean_long and action["action"] == "ENTER":
+                                    # JeanLong may open LONG positions only during US premarket (04:00-09:30 ET).
+                                    eastern_event_time = event_time.astimezone(eastern)
+                                    premarket_time = eastern_event_time.time()
+                                    if side != "LONG" or not (datetime.strptime("04:00", "%H:%M").time() <= premarket_time < datetime.strptime("09:30", "%H:%M").time()):
+                                        continue
                                 inserted = conn.execute("""
                                     INSERT INTO tradeboot_paper_events(strategy_id,symbol,action,event_at,reason)
                                     VALUES (%s,%s,%s,%s,%s)
@@ -575,10 +592,14 @@ def run_cycle():
                                     conn.execute("""
                                         INSERT INTO tradeboot_paper_trades
                                         (strategy_id,strategy_name,symbol,status,entry_price,quantity,allocated_usd,
-                                         stop_price,take_price,entry_at,last_quote_at,side)
-                                        VALUES (%s,%s,%s,'OPEN',%s,%s,%s,%s,%s,%s,%s,%s)
+                                         stop_price,take_price,entry_at,last_quote_at,side,order_type,time_in_force,extended_hours,limit_price)
+                                        VALUES (%s,%s,%s,'OPEN',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                                     """, (strategy["id"],strategy["name"],symbol,price,budget/price,budget,
-                                          stop,take,event_time,event_time,side))
+                                          stop,take,event_time,event_time,side,
+                                          "LIMIT" if is_jean_long else None,
+                                          "DAY" if is_jean_long else None,
+                                          True if is_jean_long else None,
+                                          round(price * 1.01, 2) if is_jean_long else None))
                                 elif action["action"] == "MOVE_STOP" and open_row:
                                     old_stop = float(open_row[4])
                                     improves = price > 0 and ((side == "LONG" and isinstance(action.get("stop"), (int,float)) and action["stop"] > old_stop)
