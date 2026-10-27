@@ -48,11 +48,12 @@ _PROGRAM_SYMBOLS = tuple(dict.fromkeys(
 
 
 def _program_scan_symbols(now):
-    """Build a bounded candidate list from the US-only Schwab market-movers feed."""
-    if _PROGRAM_SYMBOLS_RAW:
-        return list(_PROGRAM_SYMBOLS)
-    if _EXPLICIT_PROGRAM_SYMBOLS:
-        return list(_SYMBOLS)
+    """Return only US-listed candidates discovered from Schwab NASDAQ/NYSE movers.
+
+    Deliberately ignore generic symbol-list overrides here: they can contain
+    international listings and would bypass the US-only scanner boundary.
+    Formula strategies retain their separate, explicitly configured watchlist.
+    """
     return get_global_candidates(now=now, limit=25)
 
 
@@ -600,14 +601,8 @@ def run_cycle():
                                     "message": str(exc)[:180]})
 
     scan_diagnostic = get_twelve_data_diagnostics().get("market_movers/stocks", {})
-    if _PROGRAM_SYMBOLS_RAW:
-        scan_source = "explicit_program_symbols"
-    elif _EXPLICIT_PROGRAM_SYMBOLS:
-        scan_source = "explicit"
-    elif scan_diagnostic.get("provider") == "schwab":
+    if scan_diagnostic.get("provider") == "schwab":
         scan_source = "schwab_us_market_movers"
-    elif scan_diagnostic.get("provider") == "twelve_data" and scan_diagnostic.get("status") == "ok":
-        scan_source = "twelve_data_global_market_movers"
     else:
         scan_source = "no_candidate_feed"
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
