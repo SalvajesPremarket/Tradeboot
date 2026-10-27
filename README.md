@@ -34,11 +34,12 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 ## Schwab + Twelve Data (escáner global en paper trading)
 
 - Schwab sigue siendo el proveedor preferido de cotizaciones e históricos para acciones de EE. UU.; las órdenes de Schwab no se usan.
-- `TWELVE_DATA_API_KEY` configura la API de Twelve Data. `TWELVE_DATA_MARKET_COUNTRIES` es opcional; si no se define, Tradeboot obtiene el catálogo de bolsas/países de Twelve Data y rota las consultas de ganadores entre ellos.
-- La ruta `/market_movers/stocks` consume 100 créditos por solicitud y requiere el plan Pro (individual) o Venture (empresa), según la documentación del proveedor. Las solicitudes se rotan por país y se cachean para respetar los límites por minuto.
-- Twelve Data aporta candidatos globales, datos de precios para mercados internacionales y comunicados oficiales. Para acciones de EE. UU. se intenta Schwab primero y Twelve Data sirve de respaldo cuando está configurado.
-- La cobertura efectiva depende de los mercados habilitados en la cuenta de Twelve Data. La rotación descubre países del catálogo, pero no puede superar las restricciones del plan contratado.
-- El contexto de *float* solo se acepta si el proveedor devuelve un campo explícito de float; las acciones en circulación no se confunden con float. Las reglas obligatorias de JeanLong no se desactivan si falta float o una noticia fresca, por lo que el motor rechaza la entrada en esos casos.
+- `TWELVE_DATA_API_KEY` configura la API de Twelve Data. `TWELVE_DATA_MARKET_COUNTRIES` es opcional y solo se usa para la rotación de mercados cuando la cuenta tiene acceso al endpoint de ganadores.
+- `/market_movers/stocks` consume 100 créditos por solicitud y requiere Pro (individual) o Venture (empresa). Para proteger una cuenta Basic Free, los endpoints de pago `market_movers/stocks` y `statistics` quedan desactivados por defecto y se registran como omitidos en el diagnóstico.
+- Solo activar `TWELVE_DATA_ENABLE_PAID_ENDPOINTS=true` después de confirmar que el plan contratado permite esos endpoints y se acepta su consumo de créditos. No activar esa variable en Basic Free.
+- Con Basic Free, el escáner no puede descubrir automáticamente ganadores globales mediante `market_movers/stocks`. Para pruebas acotadas se puede definir `PAPER_TRADING_PROGRAM_SYMBOLS` con una lista explícita de símbolos permitidos por el plan; eso es una watchlist fija, no un escaneo global automático.
+- Para acciones de EE. UU. se intenta Schwab primero y Twelve Data sirve de respaldo cuando está configurado. El acceso a precios e históricos de Twelve Data depende del símbolo y del mercado habilitados en la cuenta.
+- El contexto de *float* solo se acepta si el proveedor devuelve un campo explícito de float; las acciones en circulación no se confunden con float. Con Basic Free, *float* no se solicita a través de `statistics`; las reglas obligatorias de JeanLong no se desactivan si falta float o una noticia fresca.
 - No incluir la API key en el repositorio ni en los logs; añadirla como secreto de entorno en Render.
 
 ## Endpoints
