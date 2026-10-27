@@ -420,7 +420,7 @@ def run_cycle():
                           price=EXCLUDED.price, day_volume=COALESCE(EXCLUDED.day_volume,tradeboot_market_ticks.day_volume)
                     """, (symbol, live_at.astimezone(timezone.utc), live_price, live_volume, "twelve_data_quotes" if quote_provider == "twelve_data" else "schwab_quotes"))
             except (TypeError, ValueError, OverflowError, OSError) as exc:
-                diagnostic = {"symbol": symbol, "reason": "schwab_live_quote_stale_or_invalid",
+                diagnostic = {"symbol": symbol, "reason": quote_provider + "_live_quote_stale_or_invalid",
                               "detail": str(exc)[:80]}
                 if "age" in locals() and isinstance(age, (int, float)):
                     diagnostic["age_seconds"] = round(age, 1)
@@ -578,7 +578,7 @@ def run_cycle():
                       "program_scan_source":scan_source,
                       "active_formula_strategies":len(active),
                       "active_program_strategies":len(active_programs),
-                      "program_engine_status":"schwab_live_ticks_plus_historical_indicator_seed" if active_programs else "idle",
+                      "program_engine_status":"provider_live_ticks_plus_historical_indicator_seed" if active_programs else "idle",
                       "scanner_context_provider":"twelve_data" if twelve_data_configured() else "missing_twelve_data_api_key",
                       "scanner_diagnostic":dict(get_twelve_data_diagnostics().get("market_movers/stocks", {"status":"missing_api_key"} if not twelve_data_configured() else {"status":"not_requested"})),
                       "evaluations":evaluated,"skipped":skipped[:30],
