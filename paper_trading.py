@@ -491,6 +491,8 @@ def run_cycle():
                         "actions_generated": len(result.get("actions", [])),
                         "last_reject_reasons": result_diagnostics.get("last_reject_reasons", []),
                         "last_metrics": result_diagnostics.get("last_metrics", {}),
+                        "last_pattern_state": result_diagnostics.get("last_pattern_state"),
+                        "last_wait_reason": result_diagnostics.get("last_wait_reason"),
                         "scanner_context_diagnostic": scanner_context.get("diagnostic", {}),
                     })
                     new_actions = 0
