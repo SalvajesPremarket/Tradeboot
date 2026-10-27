@@ -407,9 +407,15 @@ def run_cycle():
                     raise ValueError("quote_timestamp_unavailable")
                 fresh_stamps = [item for item in parsed_stamps
                                 if -10 <= item[2] <= _TICK_MAX_AGE_SECONDS]
-                live_at, timestamp_field, age = max(
-                    fresh_stamps or parsed_stamps, key=lambda item: item[0]
-                )
+                # Never fall back to a timestamp outside the accepted freshness window.
+                # A future timestamp must not be silently preferred over valid market time.
+                if not fresh_stamps:
+                    if parsed_stamps:
+                        newest = max(parsed_stamps, key=lambda item: item[0])
+                        live_at, timestamp_field, age = newest
+                        raise ValueError("quote_timestamp_outside_freshness_window")
+                    raise ValueError("quote_timestamp_unavailable")
+                live_at, timestamp_field, age = max(fresh_stamps, key=lambda item: item[0])
                 if live_price <= 0 or not __import__("math").isfinite(live_price):
                     raise ValueError("quote_price_invalid")
                 if age < -10 or age > _TICK_MAX_AGE_SECONDS:
