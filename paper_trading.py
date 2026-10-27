@@ -58,6 +58,8 @@ def _program_scan_symbols(now):
 
 _lock = threading.Lock()
 _thread = None
+_tick_thread = None
+_TICK_COLLECTOR_INTERVAL_SECONDS = max(3, min(10, int(os.environ.get("PAPER_TRADING_TICK_INTERVAL_SECONDS", "5"))))
 
 
 def _init_tables(conn):
@@ -627,10 +629,100 @@ def _loop():
         time.sleep(_INTERVAL)
 
 
+def _tick_collector_loop():
+    """Collect fresh, read-only quotes between strategy cycles so 20-second entry windows are observable."""
+    from schwab_integration import get_quotes
+
+    print("Tradeboot live tick collector entered", flush=True)
+    while True:
+        try:
+            with _connect() as conn:
+                _init_tables(conn)
+                row = conn.execute(
+                    "SELECT state_value FROM tradeboot_paper_state WHERE state_key='worker'"
+                ).fetchone()
+            worker = json.loads(row[0]) if row and row[0] else {}
+            symbols = worker.get("program_scan_symbols") or []
+            symbols = list(dict.fromkeys(
+                str(symbol).strip().upper() for symbol in symbols
+                if isinstance(symbol, str) and symbol.strip()
+            ))[:25]
+            if symbols:
+                status, payload = get_quotes(symbols)
+                quotes = payload.get("quotes", {}) if status == 200 and payload.get("ok") else {}
+                now = datetime.now(timezone.utc)
+                rows = []
+                for symbol in symbols:
+                    raw = quotes.get(symbol)
+                    quote = raw.get("quote", raw) if isinstance(raw, dict) else None
+                    if not isinstance(quote, dict):
+                        continue
+                    try:
+                        price = float(quote.get("lastPrice") or quote.get("mark") or 0)
+                        stamps = []
+                        for field in ("quoteTimeInLong", "tradeTimeInLong", "tradeTime", "quoteTime"):
+                            value = quote.get(field)
+                            if value is None or value == "":
+                                continue
+                            try:
+                                if isinstance(value, str) and not value.strip().isdigit():
+                                    stamp = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+                                    if stamp.tzinfo is None:
+                                        stamp = stamp.replace(tzinfo=timezone.utc)
+                                else:
+                                    numeric = float(value)
+                                    stamp = datetime.fromtimestamp(
+                                        numeric / (1000 if numeric > 10_000_000_000 else 1),
+                                        timezone.utc,
+                                    )
+                                stamp = stamp.astimezone(timezone.utc)
+                                age = (now - stamp).total_seconds()
+                                if -10 <= age <= _TICK_MAX_AGE_SECONDS:
+                                    stamps.append(stamp)
+                            except (TypeError, ValueError, OverflowError, OSError):
+                                continue
+                        if not stamps or not __import__("math").isfinite(price) or price <= 0:
+                            continue
+                        stamp = max(stamps)
+                        volume_value = quote.get("totalVolume", quote.get("volume"))
+                        try:
+                            volume = float(volume_value) if volume_value is not None else None
+                            if volume is not None and (not __import__("math").isfinite(volume) or volume < 0):
+                                volume = None
+                        except (TypeError, ValueError):
+                            volume = None
+                        rows.append((symbol, stamp, price, volume))
+                    except (TypeError, ValueError, OverflowError, OSError):
+                        continue
+                if rows:
+                    with _connect() as conn:
+                        _init_tables(conn)
+                        with conn.transaction():
+                            for symbol, stamp, price, volume in rows:
+                                conn.execute(
+                                    """INSERT INTO tradeboot_market_ticks(symbol,tick_at,price,day_volume,source)
+                                       VALUES (%s,%s,%s,%s,'schwab_quotes')
+                                       ON CONFLICT(symbol,tick_at) DO UPDATE SET
+                                         price=EXCLUDED.price,
+                                         day_volume=COALESCE(EXCLUDED.day_volume,tradeboot_market_ticks.day_volume)""",
+                                    (symbol, stamp, price, volume),
+                                )
+        except Exception as exc:
+            # Keep the collector isolated: a quote/API issue must not stop the strategy worker.
+            print(f"Tradeboot live tick collector cycle failed: {type(exc).__name__}", flush=True)
+        time.sleep(_TICK_COLLECTOR_INTERVAL_SECONDS)
+
+
 def start_paper_trading_worker():
-    global _thread
+    global _thread, _tick_thread
     with _lock:
-        if _thread is not None and _thread.is_alive():
-            return
-        _thread = threading.Thread(target=_loop, name="tradeboot-paper-trader", daemon=True)
-        _thread.start()
+        if _thread is None or not _thread.is_alive():
+            _thread = threading.Thread(target=_loop, name="tradeboot-paper-trader", daemon=True)
+            _thread.start()
+        if _tick_thread is None or not _tick_thread.is_alive():
+            _tick_thread = threading.Thread(
+                target=_tick_collector_loop,
+                name="tradeboot-live-tick-collector",
+                daemon=True,
+            )
+            _tick_thread.start()
