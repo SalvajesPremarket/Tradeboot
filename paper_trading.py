@@ -155,7 +155,11 @@ def get_paper_status():
                 FROM tradeboot_paper_trades
             """).fetchone()
         state = {k: {"value": json.loads(v), "updated_at": t.isoformat()} for k,v,t in rows}
-        return {"ok": True, "mode": "paper_only", "worker": state.get("worker", {}).get("value", {"status":"starting"}),
+        worker = state.get("worker", {}).get("value", {"status":"starting"})
+        tick_collector = state.get("tick_collector", {}).get("value")
+        if tick_collector:
+            worker["tick_collector"] = tick_collector
+        return {"ok": True, "mode": "paper_only", "worker": worker,
                 "open_trades": int(counts[0]), "closed_trades": int(counts[1]), "realized_pnl_usd": float(counts[2]),
                 "trades": [{"id":r[0],"strategy_id":r[1],"strategy_name":r[2],"symbol":r[3],"status":r[4],
                   "entry_price":r[5],"exit_price":r[6],"quantity":r[7],"allocated_usd":r[8],"stop_price":r[9],
@@ -647,9 +651,16 @@ def _tick_collector_loop():
                 str(symbol).strip().upper() for symbol in symbols
                 if isinstance(symbol, str) and symbol.strip()
             ))[:25]
+            quote_status = None
+            quote_error = None
+            received_quotes = 0
+            persisted_ticks = 0
             if symbols:
                 status, payload = get_quotes(symbols)
+                quote_status = status
+                quote_error = payload.get("error") if isinstance(payload, dict) else "invalid_quote_response"
                 quotes = payload.get("quotes", {}) if status == 200 and payload.get("ok") else {}
+                received_quotes = len(quotes) if isinstance(quotes, dict) else 0
                 now = datetime.now(timezone.utc)
                 rows = []
                 for symbol in symbols:
@@ -707,8 +718,28 @@ def _tick_collector_loop():
                                          day_volume=COALESCE(EXCLUDED.day_volume,tradeboot_market_ticks.day_volume)""",
                                     (symbol, stamp, price, volume),
                                 )
+                    persisted_ticks = len(rows)
+            _state("tick_collector", {
+                "status": "ok" if persisted_ticks else ("no_symbols" if not symbols else "no_fresh_quotes"),
+                "last_cycle_at": datetime.now(timezone.utc).isoformat(),
+                "symbols_requested": len(symbols),
+                "quotes_received": received_quotes,
+                "fresh_ticks_persisted": persisted_ticks,
+                "quote_http_status": quote_status,
+                "detail": quote_error if quote_status not in (200, None) else None,
+                "interval_seconds": _TICK_COLLECTOR_INTERVAL_SECONDS,
+            })
         except Exception as exc:
             # Keep the collector isolated: a quote/API issue must not stop the strategy worker.
+            try:
+                _state("tick_collector", {
+                    "status": "error",
+                    "last_cycle_at": datetime.now(timezone.utc).isoformat(),
+                    "detail": type(exc).__name__,
+                    "interval_seconds": _TICK_COLLECTOR_INTERVAL_SECONDS,
+                })
+            except Exception:
+                pass
             print(f"Tradeboot live tick collector cycle failed: {type(exc).__name__}", flush=True)
         time.sleep(_TICK_COLLECTOR_INTERVAL_SECONDS)
 
