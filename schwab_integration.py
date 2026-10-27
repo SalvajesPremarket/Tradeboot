@@ -259,6 +259,38 @@ def get_quotes(symbols):
         return 502, {"ok": False, "error": "schwab_market_data_unavailable"}
 
 
+
+def get_market_movers(universe="NASDAQ", sort="PERCENT_CHANGE_UP", frequency=0):
+    """Read-only Schwab market movers for US exchanges; no order endpoints are used."""
+    allowed_universes = {"NASDAQ", "NYSE", "EQUITY_ALL"}
+    allowed_sorts = {"VOLUME", "TRADES", "PERCENT_CHANGE_UP", "PERCENT_CHANGE_DOWN"}
+    if universe not in allowed_universes or sort not in allowed_sorts or frequency not in (0, 1, 5, 10, 30, 60):
+        return 400, {"ok": False, "error": "invalid_mover_parameters"}
+    try:
+        access_token = _access_token()
+        request = Request(
+            MARKET_DATA_BASE + "/movers/" + universe + "?" + urlencode({"sort": sort, "frequency": frequency}),
+            headers={
+                "Authorization": "Bearer " + access_token,
+                "Accept": "application/json",
+                "User-Agent": "Tradeboot/1.0 (read-only Schwab market-movers client)",
+            },
+            method="GET",
+        )
+        with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        rows = payload.get("screeners") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            return 502, {"ok": False, "error": "schwab_movers_response_invalid"}
+        return 200, {"ok": True, "provider": "schwab", "universe": universe, "screeners": rows,
+                     "real_orders_enabled": False}
+    except HTTPError as exc:
+        return 502, {"ok": False, "error": "schwab_movers_rejected", "upstream_status": exc.code}
+    except ValueError as exc:
+        return 503, {"ok": False, "error": str(exc)}
+    except (URLError, TimeoutError, OSError, UnicodeError, json.JSONDecodeError):
+        return 502, {"ok": False, "error": "schwab_movers_unavailable"}
+
 def get_price_history(symbol, *, daily=False):
     """Read-only Schwab price history: minute bars for replay or daily bars for D/W context."""
     import re
