@@ -54,7 +54,7 @@ def _program_scan_symbols(now):
     international listings and would bypass the US-only scanner boundary.
     Formula strategies retain their separate, explicitly configured watchlist.
     """
-    return get_global_candidates(now=now, limit=25)
+    return get_global_candidates(now=now, limit=6)
 
 
 _lock = threading.Lock()
