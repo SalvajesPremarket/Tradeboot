@@ -31,6 +31,16 @@ Servicio independiente de datos de mercado y diagnóstico para Tradeboot. No imp
 - La clave de cifrado `SCHWAB_TOKEN_ENCRYPTION_KEY` debe ser una clave Fernet válida. El token cifrado persistido permite guardar las rotaciones del refresh token sin depender de editar variables en cada renovación.
 - La aplicación debe estar aprobada por Schwab y tener permisos de Market Data antes de que OAuth y las cotizaciones puedan funcionar.
 
+## Schwab + Twelve Data (escáner global en paper trading)
+
+- Schwab sigue siendo el proveedor preferido de cotizaciones e históricos para acciones de EE. UU.; las órdenes de Schwab no se usan.
+- `TWELVE_DATA_API_KEY` configura la API de Twelve Data. `TWELVE_DATA_MARKET_COUNTRIES` es opcional; si no se define, Tradeboot obtiene el catálogo de bolsas/países de Twelve Data y rota las consultas de ganadores entre ellos.
+- La ruta `/market_movers/stocks` consume 100 créditos por solicitud y requiere el plan Pro (individual) o Venture (empresa), según la documentación del proveedor. Las solicitudes se rotan por país y se cachean para respetar los límites por minuto.
+- Twelve Data aporta candidatos globales, datos de precios para mercados internacionales y comunicados oficiales. Para acciones de EE. UU. se intenta Schwab primero y Twelve Data sirve de respaldo cuando está configurado.
+- La cobertura efectiva depende de los mercados habilitados en la cuenta de Twelve Data. La rotación descubre países del catálogo, pero no puede superar las restricciones del plan contratado.
+- El contexto de *float* solo se acepta si el proveedor devuelve un campo explícito de float; las acciones en circulación no se confunden con float. Las reglas obligatorias de JeanLong no se desactivan si falta float o una noticia fresca, por lo que el motor rechaza la entrada en esos casos.
+- No incluir la API key en el repositorio ni en los logs; añadirla como secreto de entorno en Render.
+
 ## Endpoints
 
 - `GET /health` — comprobación de salud.
