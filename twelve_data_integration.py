@@ -1,8 +1,8 @@
-"""Twelve Data read-only global equity discovery and data adapter for Tradeboot.
+"""US-listed stock discovery and read-only market-data adapter for Tradeboot.
 
-The market-movers endpoint costs 100 API credits per request and requires a Pro/Venture
-plan. Discovery rotates one configured country per scan cycle and keeps a short rolling
-cache, so the worker does not fan out one expensive request per country every cycle.
+Free-plan discovery uses Schwab's NASDAQ and NYSE market-movers feed. Twelve Data's
+paid market-movers endpoint is deliberately disabled to keep the deployment at $0
+and prevent international listings from entering the automatic scanner.
 """
 import json
 import os
@@ -16,8 +16,9 @@ from urllib.request import Request, urlopen
 API_BASE = "https://api.twelvedata.com"
 TIMEOUT_SECONDS = 12
 _API_KEY = (os.environ.get("TWELVE_DATA_API_KEY") or "").strip()
-# Paid endpoints are opt-in so a Basic account never burns credits on premium calls.
-_ENABLE_PAID_ENDPOINTS = os.environ.get("TWELVE_DATA_ENABLE_PAID_ENDPOINTS", "").strip().lower() in ("1", "true", "yes", "on")
+# Hard-disable paid endpoints: this deployment must remain on free plans and US stocks only.
+# Ignore TWELVE_DATA_ENABLE_PAID_ENDPOINTS even if it exists in Render's environment.
+_ENABLE_PAID_ENDPOINTS = False
 _COUNTRIES_RAW = os.environ.get("TWELVE_DATA_MARKET_COUNTRIES", "").strip()
 _COUNTRIES = tuple(dict.fromkeys(item.strip() for item in _COUNTRIES_RAW.split(",") if item.strip()))
 _FALLBACK_COUNTRIES = (
@@ -127,7 +128,7 @@ def _country_list():
 
 
 def get_global_candidates(now=None, limit=None):
-    """Rotate market-mover requests across exchange countries and return cached global gainers."""
+    """Return bounded US-listed candidates from Schwab NASDAQ/NYSE market movers."""
     global _COUNTRY_CURSOR
     if not _API_KEY and _ENABLE_PAID_ENDPOINTS:
         _DIAGNOSTICS["market_movers/stocks"] = {"status": "missing_api_key", "provider": "twelve_data"}
