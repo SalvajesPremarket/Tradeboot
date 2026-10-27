@@ -76,8 +76,8 @@ button:hover{filter:brightness(1.18);border-color:var(--cyan)}button.secondary{b
   <div style="overflow-x:auto;margin-top:12px">
     <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:760px">
       <thead><tr style="text-align:left;color:var(--muted);border-bottom:1px solid var(--line)">
-        <th style="padding:9px">Fecha</th><th style="padding:9px">Estrategia</th><th style="padding:9px">Símbolo</th><th style="padding:9px">Lado</th><th style="padding:9px">Estado</th><th style="padding:9px">Entrada</th><th style="padding:9px">Salida</th><th style="padding:9px">P/L USD</th><th style="padding:9px">Motivo</th>
-      </tr></thead><tbody id="paper-trades"><tr><td colspan="9" class="empty">Sin operaciones registradas.</td></tr></tbody>
+        <th style="padding:9px">Fecha</th><th style="padding:9px">Estrategia</th><th style="padding:9px">Símbolo</th><th style="padding:9px">Lado</th><th style="padding:9px">Estado</th><th style="padding:9px">Entrada</th><th style="padding:9px">Orden</th><th style="padding:9px">Salida</th><th style="padding:9px">P/L USD</th><th style="padding:9px">Motivo</th>
+      </tr></thead><tbody id="paper-trades"><tr><td colspan="10" class="empty">Sin operaciones registradas.</td></tr></tbody>
     </table>
   </div>
 </section>
@@ -411,14 +411,15 @@ async function refreshPaperTrading(){
    '<td style="padding:9px">'+paperEscape(t.side||'LONG')+'</td>'+
    '<td style="padding:9px">'+paperEscape(t.status)+'</td>'+
    '<td style="padding:9px">'+paperMoney(t.entry_price)+'</td>'+
+   '<td style="padding:9px">'+(t.order_type==='LIMIT'?'LIMIT · '+paperEscape(t.time_in_force||'DAY')+' · '+(t.extended_hours?'EXT':'RTH')+' · límite '+paperMoney(t.limit_price):'—')+'</td>'+
    '<td style="padding:9px">'+paperMoney(t.exit_price)+'</td>'+
    '<td style="padding:9px">'+paperMoney(t.pnl_usd)+'</td>'+
-   '<td style="padding:9px">'+paperEscape(t.exit_reason||'—')+'</td></tr>').join(''):'<tr><td colspan="9" class="empty">Todavía no hay operaciones. El motor no abrirá operaciones si faltan datos de mercado válidos.</td></tr>';
+   '<td style="padding:9px">'+paperEscape(t.exit_reason||'—')+'</td></tr>').join(''):'<tr><td colspan="10" class="empty">Todavía no hay operaciones. El motor no abrirá operaciones si faltan datos de mercado válidos.</td></tr>';
  }catch(e){
   $('paper-worker-status').textContent='No disponible';
   $('paper-worker-time').textContent='No se pudo leer el estado';
   $('paper-message').textContent='No se pudo consultar PostgreSQL: '+e.message;
-  $('paper-trades').innerHTML='<tr><td colspan="9" class="empty">Historial no disponible.</td></tr>';
+  $('paper-trades').innerHTML='<tr><td colspan="10" class="empty">Historial no disponible.</td></tr>';
  }finally{if(button)button.disabled=false}
 }
 async function runPaperSelfTest(){
