@@ -7,6 +7,8 @@ import twelve_data_integration as td
 class TwelveDataIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.old_key = td._API_KEY
+        self.old_paid_endpoints = td._ENABLE_PAID_ENDPOINTS
+        td._ENABLE_PAID_ENDPOINTS = False
         self.old_countries = td._COUNTRIES
         self.old_cursor = td._COUNTRY_CURSOR
         td._API_KEY = "test-key"
@@ -20,6 +22,7 @@ class TwelveDataIntegrationTests(unittest.TestCase):
 
     def tearDown(self):
         td._API_KEY = self.old_key
+        td._ENABLE_PAID_ENDPOINTS = self.old_paid_endpoints
         td._COUNTRIES = self.old_countries
         td._COUNTRY_CURSOR = self.old_cursor
         td._CACHE.clear()
@@ -27,7 +30,14 @@ class TwelveDataIntegrationTests(unittest.TestCase):
         td._SYMBOL_META.clear()
         td._DIAGNOSTICS.clear()
 
+    def test_basic_plan_skips_paid_market_movers_without_requesting_endpoint(self):
+        with patch.object(td, "_request_json") as request:
+            self.assertEqual(td.get_global_candidates(limit=25), [])
+        request.assert_not_called()
+        self.assertEqual(td.get_diagnostics()["market_movers/stocks"]["status"], "skipped_plan_basic")
+
     def test_global_candidates_filter_invalid_prices_and_keep_market_metadata(self):
+        td._ENABLE_PAID_ENDPOINTS = True
         payload = {"values": [
             {"symbol": "GOOD", "last": 5.5, "percent_change": 12.0, "exchange": "NASDAQ"},
             {"symbol": "TOO_HIGH", "last": 25.0, "percent_change": 50.0, "exchange": "NASDAQ"},
