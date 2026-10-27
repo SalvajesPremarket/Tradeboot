@@ -16,6 +16,8 @@ from urllib.request import Request, urlopen
 API_BASE = "https://api.twelvedata.com"
 TIMEOUT_SECONDS = 12
 _API_KEY = (os.environ.get("TWELVE_DATA_API_KEY") or "").strip()
+# Paid endpoints are opt-in so a Basic account never burns credits on premium calls.
+_ENABLE_PAID_ENDPOINTS = os.environ.get("TWELVE_DATA_ENABLE_PAID_ENDPOINTS", "").strip().lower() in ("1", "true", "yes", "on")
 _COUNTRIES_RAW = os.environ.get("TWELVE_DATA_MARKET_COUNTRIES", "").strip()
 _COUNTRIES = tuple(dict.fromkeys(item.strip() for item in _COUNTRIES_RAW.split(",") if item.strip()))
 _FALLBACK_COUNTRIES = (
@@ -129,6 +131,13 @@ def get_global_candidates(now=None, limit=None):
     global _COUNTRY_CURSOR
     if not _API_KEY:
         _DIAGNOSTICS["market_movers/stocks"] = {"status": "missing_api_key", "provider": "twelve_data"}
+        return []
+    if not _ENABLE_PAID_ENDPOINTS:
+        _DIAGNOSTICS["market_movers/stocks"] = {
+            "status": "skipped_plan_basic",
+            "provider": "twelve_data",
+            "detail": "market_movers_requires_pro_or_venture",
+        }
         return []
     countries = _country_list()
     if not countries:
@@ -328,20 +337,27 @@ def get_scanner_context(symbol, now=None, metadata=None):
     params = _request_params_for_symbol(symbol, meta)
     stats_key = "statistics:" + str(symbol).upper() + ":" + str(params.get("exchange", "")) + ":" + str(params.get("country", ""))
     stats_payload = None
-    now_mono = time.monotonic()
-    with _CACHE_LOCK:
-        cached = _CACHE.get(stats_key)
-        if cached and cached[0] > now_mono:
-            stats_payload = cached[1][1] if cached[1][0] == 200 else None
-            should_request_stats = False
-        else:
-            should_request_stats = now_mono - _LAST_STATS_REQUEST >= 30
-            if should_request_stats:
-                _LAST_STATS_REQUEST = now_mono
-    if should_request_stats:
-        stats_status, stats_payload = _request_json("statistics", params, stats_key, 21600)
-        if stats_status != 200:
-            stats_payload = None
+    if _ENABLE_PAID_ENDPOINTS:
+        now_mono = time.monotonic()
+        with _CACHE_LOCK:
+            cached = _CACHE.get(stats_key)
+            if cached and cached[0] > now_mono:
+                stats_payload = cached[1][1] if cached[1][0] == 200 else None
+                should_request_stats = False
+            else:
+                should_request_stats = now_mono - _LAST_STATS_REQUEST >= 30
+                if should_request_stats:
+                    _LAST_STATS_REQUEST = now_mono
+        if should_request_stats:
+            stats_status, stats_payload = _request_json("statistics", params, stats_key, 21600)
+            if stats_status != 200:
+                stats_payload = None
+    else:
+        _DIAGNOSTICS["statistics"] = {
+            "status": "skipped_plan_basic",
+            "provider": "twelve_data",
+            "detail": "statistics_requires_paid_plan",
+        }
     float_shares = _find_float_shares(stats_payload) if stats_payload else None
 
     news_params = dict(params)
