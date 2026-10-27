@@ -191,7 +191,12 @@ def simulate_program(payload):
                 action["event_at"] = tick["timestamp"].isoformat()
                 actions.append(action)
         position = dict(bot.pos) if bot.pos else None
-        diagnostics = {"last_reject_reasons": bot.last_reject, "last_metrics": bot.last_metrics}
+        diagnostics = {
+            "last_reject_reasons": bot.last_reject,
+            "last_metrics": bot.last_metrics,
+            "last_pattern_state": getattr(bot, "last_pattern_state", None),
+            "last_wait_reason": getattr(bot, "last_wait_reason", None),
+        }
     else:
         daily = _bars(payload.get("daily_candles", []), "daily_candles", volume_required=True, max_rows=2000)
         if len(daily) < 60:
