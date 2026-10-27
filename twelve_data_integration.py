@@ -16,6 +16,10 @@ from urllib.request import Request, urlopen
 API_BASE = "https://api.twelvedata.com"
 TIMEOUT_SECONDS = 12
 _API_KEY = (os.environ.get("TWELVE_DATA_API_KEY") or "").strip()
+# Optional FMP fallback: read-only, rate-limited, and never required for startup.
+_FMP_API_KEY = (os.environ.get("FMP_API_KEY") or os.environ.get("FINANCIAL_MODELING_PREP_API_KEY") or "").strip()
+_FMP_BASE = "https://financialmodelingprep.com/stable"
+_FMP_TIMEOUT_SECONDS = 8
 # Paid endpoints are opt-in so a Basic account never burns credits on premium calls.
 _ENABLE_PAID_ENDPOINTS = os.environ.get("TWELVE_DATA_ENABLE_PAID_ENDPOINTS", "").strip().lower() in ("1", "true", "yes", "on")
 _COUNTRIES_RAW = os.environ.get("TWELVE_DATA_MARKET_COUNTRIES", "").strip()
@@ -376,61 +380,175 @@ def _find_float_shares(payload):
     return None
 
 
+def _fmp_request_json(endpoint, params, cache_key, ttl_seconds):
+    """Read-only FMP request with a long success cache and sanitized diagnostics."""
+    if not _FMP_API_KEY:
+        return 503, None
+    now_mono = time.monotonic()
+    with _CACHE_LOCK:
+        cached = _CACHE.get(cache_key)
+        if cached and cached[0] > now_mono:
+            return cached[1]
+    request = Request(
+        _FMP_BASE + "/" + endpoint.lstrip("/") + "?" + urlencode(params or {}),
+        headers={"Accept": "application/json", "apikey": _FMP_API_KEY, "User-Agent": "Tradeboot/1.0"},
+        method="GET",
+    )
+    status, payload = 502, None
+    diagnostic = {"provider": "fmp", "status": "request_failed"}
+    try:
+        with urlopen(request, timeout=_FMP_TIMEOUT_SECONDS) as response:
+            status = int(response.status)
+            payload = json.loads(response.read().decode("utf-8"))
+        if status == 200 and not (isinstance(payload, dict) and (payload.get("Error Message") or payload.get("error"))):
+            diagnostic = {"provider": "fmp", "status": "ok", "http_status": status}
+        else:
+            diagnostic = {"provider": "fmp", "status": "provider_error", "http_status": status}
+            if status == 200:
+                status = 502
+                payload = None
+    except HTTPError as exc:
+        status = int(exc.code)
+        diagnostic = {"provider": "fmp", "status": "rate_limited" if status == 429 else ("plan_restricted" if status in (402, 403) else "http_error"), "http_status": status}
+        payload = None
+    except (URLError, TimeoutError, OSError, UnicodeError, json.JSONDecodeError):
+        diagnostic = {"provider": "fmp", "status": "request_failed"}
+        payload = None
+    with _CACHE_LOCK:
+        _DIAGNOSTICS["fmp:" + endpoint] = diagnostic
+        # Respect rate limits: failures are briefly cached; successful data uses the
+        # caller's TTL. Float is refreshed infrequently; news is refreshed every 15 min.
+        ttl = ttl_seconds if status == 200 else (300 if status == 429 else 120)
+        _CACHE[cache_key] = (now_mono + ttl, (status, payload))
+    return status, payload
+
+
+def _fmp_float(symbol):
+    if not _FMP_API_KEY:
+        return None
+    status, payload = _fmp_request_json(
+        "shares-float", {"symbol": str(symbol).upper()},
+        "fmp:float:" + str(symbol).upper(), 21600,
+    )
+    if status != 200:
+        return None
+    return _find_float_shares(payload)
+
+
+def _fmp_news(symbol):
+    if not _FMP_API_KEY:
+        return []
+    status, payload = _fmp_request_json(
+        "news/stock", {"symbols": str(symbol).upper(), "limit": 10, "page": 0},
+        "fmp:news:" + str(symbol).upper(), 900,
+    )
+    if status != 200 or not isinstance(payload, list):
+        return []
+    rows = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        item_symbol = str(item.get("symbol") or "").strip().upper()
+        # Do not attach broad market headlines to a ticker unless FMP tags that ticker.
+        if item_symbol and item_symbol != str(symbol).upper():
+            continue
+        headline = item.get("title") or item.get("headline")
+        stamp = _parse_timestamp(item.get("publishedDate") or item.get("published_at") or item.get("date"))
+        if isinstance(headline, str) and stamp:
+            rows.append({"published_at": stamp.isoformat(), "headline": headline[:500]})
+    return rows
+
+
 def get_scanner_context(symbol, now=None, metadata=None):
-    """Fetch press releases and float only when Twelve Data explicitly supplies a float field.
+    """Get dated news and explicit float data from Twelve Data, with optional FMP fallback.
 
-    Statistics requests are globally throttled to one per 30 seconds because the endpoint
-    is expensive (50 credits). Missing float/news never disables JeanLong's mandatory filters.
+    FMP requests are opt-in via FMP_API_KEY (or FINANCIAL_MODELING_PREP_API_KEY),
+    cached per symbol, and fail closed on rate-limit or plan restrictions. No shares-
+    outstanding field is ever treated as float; missing required filters stay mandatory.
     """
-    global _LAST_STATS_REQUEST
     if not _API_KEY:
-        return {"provider": "twelve_data", "float_shares": None, "news": [], "diagnostic": {"status": "missing_api_key"}}
-    meta = metadata or get_symbol_metadata(symbol)
-    params = _request_params_for_symbol(symbol, meta)
-    stats_key = "statistics:" + str(symbol).upper() + ":" + str(params.get("exchange", "")) + ":" + str(params.get("country", ""))
-    stats_payload = None
-    if _ENABLE_PAID_ENDPOINTS:
-        now_mono = time.monotonic()
-        with _CACHE_LOCK:
-            cached = _CACHE.get(stats_key)
-            if cached and cached[0] > now_mono:
-                stats_payload = cached[1][1] if cached[1][0] == 200 else None
-                should_request_stats = False
-            else:
-                should_request_stats = now_mono - _LAST_STATS_REQUEST >= 30
-                if should_request_stats:
-                    _LAST_STATS_REQUEST = now_mono
-        if should_request_stats:
-            stats_status, stats_payload = _request_json("statistics", params, stats_key, 21600)
-            if stats_status != 200:
-                stats_payload = None
+        td_context = {"provider": "twelve_data", "float_shares": None, "news": [],
+                      "diagnostic": {"status": "missing_api_key"}}
     else:
-        _DIAGNOSTICS["statistics"] = {
-            "status": "skipped_plan_basic",
-            "provider": "twelve_data",
-            "detail": "statistics_requires_paid_plan",
-        }
-    float_shares = _find_float_shares(stats_payload) if stats_payload else None
+        meta = metadata or get_symbol_metadata(symbol)
+        params = _request_params_for_symbol(symbol, meta)
+        stats_key = "statistics:" + str(symbol).upper() + ":" + str(params.get("exchange", "")) + ":" + str(params.get("country", ""))
+        stats_payload = None
+        if _ENABLE_PAID_ENDPOINTS:
+            now_mono = time.monotonic()
+            with _CACHE_LOCK:
+                cached = _CACHE.get(stats_key)
+                if cached and cached[0] > now_mono:
+                    stats_payload = cached[1][1] if cached[1][0] == 200 else None
+                    should_request_stats = False
+                else:
+                    should_request_stats = now_mono - _LAST_STATS_REQUEST >= 30
+                    if should_request_stats:
+                        globals()["_LAST_STATS_REQUEST"] = now_mono
+            if should_request_stats:
+                stats_status, stats_payload = _request_json("statistics", params, stats_key, 21600)
+                if stats_status != 200:
+                    stats_payload = None
+        else:
+            _DIAGNOSTICS["statistics"] = {
+                "status": "skipped_plan_basic",
+                "provider": "twelve_data",
+                "detail": "statistics_requires_paid_plan",
+            }
+        float_shares = _find_float_shares(stats_payload) if stats_payload else None
 
-    news_params = dict(params)
-    news_params["outputsize"] = 10
-    news_key = "press_releases:" + str(symbol).upper() + ":" + str(news_params.get("exchange", "")) + ":" + str(news_params.get("country", ""))
-    news_status, news_payload = _request_json("press_releases", news_params, news_key, 1800)
-    news_rows = []
-    if news_status == 200 and isinstance(news_payload, dict):
-        rows = news_payload.get("data") or news_payload.get("values") or news_payload.get("press_releases") or []
-        if isinstance(rows, list):
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                headline = row.get("title") or row.get("headline") or row.get("name")
-                published = row.get("published_at") or row.get("publishedDate") or row.get("datetime") or row.get("date")
-                stamp = _parse_timestamp(published)
-                if isinstance(headline, str) and stamp:
-                    news_rows.append({"published_at": stamp.isoformat(), "headline": headline[:500]})
-    diagnostic = {
-        "status": "ok" if news_status == 200 else "press_releases_unavailable",
-        "float_available": float_shares is not None,
-        "news_count": len(news_rows),
+        news_params = dict(params)
+        news_params["outputsize"] = 10
+        news_key = "press_releases:" + str(symbol).upper() + ":" + str(news_params.get("exchange", "")) + ":" + str(news_params.get("country", ""))
+        news_status, news_payload = _request_json("press_releases", news_params, news_key, 1800)
+        news_rows = []
+        if news_status == 200 and isinstance(news_payload, dict):
+            rows = news_payload.get("data") or news_payload.get("values") or news_payload.get("press_releases") or []
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    headline = row.get("title") or row.get("headline") or row.get("name")
+                    published = row.get("published_at") or row.get("publishedDate") or row.get("datetime") or row.get("date")
+                    stamp = _parse_timestamp(published)
+                    if isinstance(headline, str) and stamp:
+                        news_rows.append({"published_at": stamp.isoformat(), "headline": headline[:500]})
+        td_context = {
+            "provider": "twelve_data",
+            "float_shares": float_shares,
+            "news": news_rows,
+            "diagnostic": {
+                "status": "ok" if news_status == 200 else "press_releases_unavailable",
+                "float_available": float_shares is not None,
+                "news_count": len(news_rows),
+            },
+        }
+
+    # Only use FMP as a fallback for missing float and merge ticker-specific news.
+    # Each endpoint has an independent cache, so the 30-second strategy cycle cannot
+    # exhaust the provider's quota by repeating the same requests.
+    float_shares = td_context.get("float_shares")
+    news_rows = list(td_context.get("news") or [])
+    if _FMP_API_KEY:
+        if float_shares is None:
+            float_shares = _fmp_float(symbol)
+        news_rows.extend(_fmp_news(symbol))
+    unique = {}
+    for row in news_rows:
+        key = (str(row.get("published_at") or ""), str(row.get("headline") or "").strip().lower())
+        if key[0] and key[1]:
+            unique[key] = row
+    merged_news = sorted(unique.values(), key=lambda row: row["published_at"], reverse=True)
+    return {
+        "provider": "twelve_data+fmp" if _FMP_API_KEY else "twelve_data",
+        "float_shares": float_shares,
+        "news": merged_news[:20],
+        "diagnostic": {
+            **td_context.get("diagnostic", {}),
+            "float_available": float_shares is not None,
+            "news_count": len(merged_news),
+            "fmp_configured": bool(_FMP_API_KEY),
+            "fmp_float_status": _DIAGNOSTICS.get("fmp:shares-float", {}).get("status", "not_requested" if not _FMP_API_KEY else "not_needed"),
+            "fmp_news_status": _DIAGNOSTICS.get("fmp:news/stock", {}).get("status", "not_requested" if not _FMP_API_KEY else "not_requested"),
+        },
     }
-    return {"provider": "twelve_data", "float_shares": float_shares, "news": news_rows, "diagnostic": diagnostic}
