@@ -30,11 +30,14 @@ class TwelveDataIntegrationTests(unittest.TestCase):
         td._SYMBOL_META.clear()
         td._DIAGNOSTICS.clear()
 
-    def test_basic_plan_skips_paid_market_movers_without_requesting_endpoint(self):
-        with patch.object(td, "_request_json") as request:
-            self.assertEqual(td.get_global_candidates(limit=25), [])
+    def test_basic_plan_skips_twelve_data_paid_endpoint_and_uses_no_fallback_when_schwab_unavailable(self):
+        with patch("schwab_integration.get_market_movers", return_value=(503, {"error": "schwab_authorization_required"})):
+            with patch.object(td, "_request_json") as request:
+                self.assertEqual(td.get_global_candidates(limit=25), [])
         request.assert_not_called()
-        self.assertEqual(td.get_diagnostics()["market_movers/stocks"]["status"], "skipped_plan_basic")
+        diagnostic = td.get_diagnostics()["market_movers/stocks"]
+        self.assertEqual(diagnostic["status"], "schwab_unavailable")
+        self.assertEqual(diagnostic["twelve_data_status"], "skipped_plan_basic")
 
     def test_basic_plan_uses_schwab_movers_without_calling_twelve_data_paid_endpoint(self):
         with patch("schwab_integration.get_market_movers") as movers:
