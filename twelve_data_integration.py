@@ -129,7 +129,7 @@ def _country_list():
 def get_global_candidates(now=None, limit=None):
     """Rotate market-mover requests across exchange countries and return cached global gainers."""
     global _COUNTRY_CURSOR
-    if not _API_KEY:
+    if not _API_KEY and _ENABLE_PAID_ENDPOINTS:
         _DIAGNOSTICS["market_movers/stocks"] = {"status": "missing_api_key", "provider": "twelve_data"}
         return []
     if not _ENABLE_PAID_ENDPOINTS:
