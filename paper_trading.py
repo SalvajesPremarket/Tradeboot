@@ -550,6 +550,7 @@ def run_cycle():
                                         event_time = event_time.replace(tzinfo=timezone.utc)
                                 except (TypeError, ValueError):
                                     continue
+                                side = str(action.get("side", "LONG")).upper()
                                 is_jean_long = strategy.get("name") == "JeanLong"
                                 if is_jean_long and action["action"] == "ENTER":
                                     # JeanLong may open LONG positions only during US premarket (04:00-09:30 ET).
