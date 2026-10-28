@@ -476,13 +476,56 @@ def _provider_json(url, api_key, provider):
         return 502, None
 
 
-def _get_free_float(symbol, now=None):
-    """Resolve actual free-float shares from a configured free-tier provider.
+def _get_yahoo_float(symbol):
+    """Read Yahoo Finance's public floatShares statistic without a paid data plan.
 
-    Prefer Massive's free Stocks float endpoint, then try FMP when configured.
-    Never substitute shares outstanding or an estimated dollar float for float shares.
-    Results are cached to stay within free API quotas.
+    Yahoo does not publish a stable official API; failures are non-fatal and never
+    replaced with shares outstanding. JeanLong remains blocked when no explicit
+    floatShares value is returned.
     """
+    symbol = str(symbol or "").strip().upper()
+    try:
+        from http.cookiejar import CookieJar
+        from urllib.request import HTTPCookieProcessor, build_opener
+        opener = build_opener(HTTPCookieProcessor(CookieJar()))
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        }
+        # Yahoo issues a crumb bound to its cookie. The initial consent endpoint may
+        # return 404 while still setting the required cookie.
+        try:
+            opener.open(Request("https://fc.yahoo.com/consent", headers=headers), timeout=TIMEOUT_SECONDS).close()
+        except HTTPError:
+            pass
+        with opener.open(Request("https://query1.finance.yahoo.com/v1/test/getcrumb", headers=headers), timeout=TIMEOUT_SECONDS) as response:
+            crumb = response.read().decode("utf-8").strip()
+        if not crumb or len(crumb) > 256 or "\n" in crumb:
+            return None, "yahoo_crumb_unavailable"
+        query = urlencode({"modules": "defaultKeyStatistics", "crumb": crumb})
+        url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?{query}"
+        with opener.open(Request(url, headers=headers), timeout=TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        summary = payload.get("quoteSummary") if isinstance(payload, dict) else None
+        results = summary.get("result") if isinstance(summary, dict) else None
+        stats = results[0].get("defaultKeyStatistics") if isinstance(results, list) and results and isinstance(results[0], dict) else None
+        raw = stats.get("floatShares") if isinstance(stats, dict) else None
+        if isinstance(raw, dict):
+            raw = raw.get("raw")
+        shares = int(float(raw))
+        if shares > 0:
+            return shares, None
+        return None, "yahoo_float_unavailable"
+    except HTTPError as exc:
+        return None, "yahoo_http_" + str(exc.code)
+    except (URLError, TimeoutError, OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError, OverflowError):
+        return None, "yahoo_float_unavailable"
+    except Exception as exc:
+        return None, "yahoo_" + type(exc).__name__
+
+
+def _get_free_float(symbol, now=None):
+    """Resolve actual float shares from free/read-only sources; never estimate."""
     symbol = str(symbol or "").strip().upper()
     cache_key = "free_float:" + symbol
     current = time.monotonic()
@@ -496,12 +539,7 @@ def _get_free_float(symbol, now=None):
         or os.environ.get("POLYGON_API_KEY")
         or ""
     ).strip()
-    fmp_key = (
-        os.environ.get("FMP_API_KEY")
-        or os.environ.get("FINANCIAL_MODELING_PREP_API_KEY")
-        or ""
-    ).strip()
-    sources = []
+    attempts = []
     if massive_key:
         url = "https://api.massive.com/stocks/vX/float?" + urlencode({
             "ticker": symbol, "apiKey": massive_key,
@@ -518,50 +556,34 @@ def _get_free_float(symbol, now=None):
         if status == 200 and shares > 0 and age_days is not None and -1 <= age_days <= 365:
             result = {
                 "float_shares": shares, "provider": "massive",
-                "effective_date": effective.date().isoformat(),
-                "status": "ok",
+                "effective_date": effective.date().isoformat(), "status": "ok",
             }
             with _CACHE_LOCK:
                 _CACHE[cache_key] = (current + 21600, result)
-                _DIAGNOSTICS["float"] = {
-                    "status": "ok", "provider": "massive",
-                    "effective_date": result["effective_date"],
-                }
+                _DIAGNOSTICS["float"] = {"status": "ok", "provider": "massive", "effective_date": result["effective_date"]}
             return result
-        sources.append("massive_no_valid_float" if status == 200 else "massive_http_" + str(status))
+        attempts.append("massive_no_valid_float" if status == 200 else "massive_http_" + str(status))
 
-    if fmp_key:
-        url = "https://financialmodelingprep.com/stable/shares-float?" + urlencode({
-            "symbol": symbol, "apikey": fmp_key,
-        })
-        status, payload = _provider_json(url, fmp_key, "fmp")
-        rows = payload if isinstance(payload, list) else []
-        row = rows[0] if rows and isinstance(rows[0], dict) else {}
-        try:
-            shares = int(float(row.get("floatShares")))
-        except (TypeError, ValueError, OverflowError):
-            shares = 0
-        if status == 200 and shares > 0:
-            result = {
-                "float_shares": shares, "provider": "fmp",
-                "effective_date": str(row.get("date") or "")[:10] or None,
-                "status": "ok",
-            }
-            with _CACHE_LOCK:
-                _CACHE[cache_key] = (current + 21600, result)
-                _DIAGNOSTICS["float"] = {
-                    "status": "ok", "provider": "fmp",
-                    "effective_date": result["effective_date"],
-                }
-            return result
-        sources.append("fmp_no_valid_float" if status == 200 else "fmp_http_" + str(status))
+    shares, yahoo_error = _get_yahoo_float(symbol)
+    if shares:
+        result = {
+            "float_shares": shares, "provider": "yahoo_finance",
+            "effective_date": None, "status": "ok",
+        }
+        with _CACHE_LOCK:
+            _CACHE[cache_key] = (current + 21600, result)
+            _DIAGNOSTICS["float"] = {"status": "ok", "provider": "yahoo_finance"}
+        return result
 
-    if not massive_key and not fmp_key:
-        result = {"float_shares": None, "provider": None, "status": "provider_key_missing"}
-    else:
-        result = {"float_shares": None, "provider": None, "status": "unavailable", "attempts": sources}
+    attempts.append(yahoo_error or "yahoo_float_unavailable")
+    result = {
+        "float_shares": None, "provider": None,
+        "status": "provider_key_missing" if not massive_key else "unavailable",
+        "attempts": attempts,
+    }
     with _CACHE_LOCK:
-        _CACHE[cache_key] = (current + 600, result)
+        # Avoid repeatedly querying Yahoo when its public endpoint is unavailable.
+        _CACHE[cache_key] = (current + 1800, result)
         _DIAGNOSTICS["float"] = dict(result)
     return result
 
@@ -595,6 +617,25 @@ def get_scanner_context(symbol, now=None, metadata=None):
                 if isinstance(headline, str) and stamp:
                     news_rows.append({"published_at": stamp.isoformat(), "headline": headline[:500], "provider": "twelve_data"})
 
+    # Keep only headlines within JeanLong's configured 16-hour freshness window
+    # before deciding whether a fallback source is needed. Old press releases must
+    # not suppress a search for genuinely fresh news.
+    current_time = now if isinstance(now, datetime) else datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    current_time = current_time.astimezone(timezone.utc)
+    def _fresh_rows(rows):
+        fresh = []
+        for row in rows:
+            stamp = _parse_timestamp(row.get("published_at"))
+            if stamp is None:
+                continue
+            age_hours = (current_time - stamp).total_seconds() / 3600
+            if 0 <= age_hours <= 16:
+                fresh.append(row)
+        return fresh
+    news_rows = _fresh_rows(news_rows)
+
     # If the press-release feed has no usable rows, use Massive's public company-news
     # endpoint only when a Massive/Polygon key already exists in the environment.
     massive_key = (os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY") or "").strip()
@@ -614,6 +655,8 @@ def get_scanner_context(symbol, now=None, metadata=None):
                 stamp = _parse_timestamp(published)
                 if isinstance(headline, str) and stamp:
                     news_rows.append({"published_at": stamp.isoformat(), "headline": headline[:500], "provider": "massive"})
+
+    news_rows = _fresh_rows(news_rows)
 
     # Last-resort no-key news feed: Yahoo Finance search exposes recent headlines
     # without a paid news endpoint. Treat it as a headline source only; JeanLong still
@@ -641,6 +684,8 @@ def get_scanner_context(symbol, now=None, metadata=None):
                         "headline": headline[:500],
                         "provider": "yahoo_finance",
                     })
+
+    news_rows = _fresh_rows(news_rows)
 
     # Most recent first; deduplicate provider overlaps.
     deduped = {}
