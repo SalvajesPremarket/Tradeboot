@@ -106,14 +106,19 @@ def login(username, password):
     now = _now()
     with _connect() as conn:
         _ensure_schema(conn)
+        # Lock the account row so two near-simultaneous logins cannot both
+        # leave a valid session behind for the same account.
         row = conn.execute(
-            "SELECT password_hash FROM tradeboot_users WHERE username = %s", (username,)
+            "SELECT password_hash FROM tradeboot_users WHERE username = %s FOR UPDATE", (username,)
         ).fetchone()
         if not row or not _verify_password(password, row[0]):
             return None
         token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         conn.execute("DELETE FROM tradeboot_sessions WHERE expires_at <= %s", (now,))
+        # One account = one active device/session. A new login immediately
+        # invalidates the previous device's server-side session.
+        conn.execute("DELETE FROM tradeboot_sessions WHERE username = %s", (username,))
         conn.execute(
             "INSERT INTO tradeboot_sessions (token_hash, username, expires_at, created_at) VALUES (%s, %s, %s, %s)",
             (token_hash, username, now + timedelta(days=SESSION_DAYS), now),
