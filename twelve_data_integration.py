@@ -201,7 +201,9 @@ def get_global_candidates(now=None, limit=None):
                     finance = yahoo_payload.get("finance", {}) if isinstance(yahoo_payload, dict) else {}
                     result_rows = finance.get("result") if isinstance(finance, dict) else None
                     quotes = result_rows[0].get("quotes", []) if isinstance(result_rows, list) and result_rows and isinstance(result_rows[0], dict) else []
-                    for row in quotes if isinstance(quotes, list) else []:
+                    if not isinstance(quotes, list):
+                        quotes = []
+                    for row in quotes:
                         if not isinstance(row, dict):
                             continue
                         symbol = str(row.get("symbol") or "").strip().upper()
