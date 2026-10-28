@@ -495,7 +495,7 @@ def _get_yahoo_float(symbol):
         # Yahoo issues a crumb bound to its cookie. The initial consent endpoint may
         # return 404 while still setting the required cookie.
         try:
-            opener.open(Request("https://fc.yahoo.com/consent", headers=headers), timeout=TIMEOUT_SECONDS).close()
+            opener.open(Request("https://fc.yahoo.com", headers=headers), timeout=TIMEOUT_SECONDS).close()
         except HTTPError:
             pass
         with opener.open(Request("https://query1.finance.yahoo.com/v1/test/getcrumb", headers=headers), timeout=TIMEOUT_SECONDS) as response:
@@ -578,7 +578,7 @@ def _get_free_float(symbol, now=None):
     attempts.append(yahoo_error or "yahoo_float_unavailable")
     result = {
         "float_shares": None, "provider": None,
-        "status": "provider_key_missing" if not massive_key else "unavailable",
+        "status": "unavailable",
         "attempts": attempts,
     }
     with _CACHE_LOCK:
@@ -591,9 +591,10 @@ def _get_free_float(symbol, now=None):
 def get_scanner_context(symbol, now=None, metadata=None):
     """Fetch fresh catalyst headlines and actual free-float shares without paid endpoints.
 
-    Twelve Data press releases are available on Basic. Float lookup uses Massive's free
-    Stocks float endpoint when MASSIVE_API_KEY/POLYGON_API_KEY is configured, then FMP
-    if its key is configured. Missing or stale float is reported, never guessed.
+    Twelve Data press releases are available on Basic. Float lookup uses Massive when
+    configured, then Yahoo Finance's explicit floatShares field as a no-paid-plan fallback.
+    Twelve Data's statistics endpoint is Pro-only, so it is not called on this free deployment.
+    Missing float is reported, never guessed or replaced with shares outstanding.
     """
     meta = metadata or get_symbol_metadata(symbol)
     params = _request_params_for_symbol(symbol, meta)
