@@ -131,6 +131,71 @@ def _country_list():
     return _FALLBACK_COUNTRIES
 
 
+def _get_finviz_us_gainers():
+    """Best-effort free US-only screener fallback; discovery only, never live quotes."""
+    from html.parser import HTMLParser
+
+    class _ScreenerParser(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.rows = []
+            self.row = None
+            self.cell = None
+            self.in_cell = False
+
+        def handle_starttag(self, tag, attrs):
+            attrs = dict(attrs)
+            if tag.lower() == "tr" and attrs.get("data-ticker"):
+                self.row = {"symbol": attrs.get("data-ticker", "").strip().upper(), "cells": []}
+            elif self.row is not None and tag.lower() == "td":
+                self.cell = []
+                self.in_cell = True
+
+        def handle_data(self, data):
+            if self.row is not None and self.in_cell and self.cell is not None:
+                self.cell.append(data)
+
+        def handle_endtag(self, tag):
+            if tag.lower() == "td" and self.row is not None and self.in_cell:
+                self.row["cells"].append(" ".join(" ".join(self.cell or []).split()))
+                self.cell = None
+                self.in_cell = False
+            elif tag.lower() == "tr" and self.row is not None:
+                self.rows.append(self.row)
+                self.row = None
+
+    url = "https://finviz.com/screener.ashx?" + urlencode({
+        "v": "111", "f": "geo_usa,sh_price_o1,sh_price_u20", "o": "-change",
+    })
+    request = Request(url, headers={
+        "Accept": "text/html",
+        "User-Agent": "Mozilla/5.0 (compatible; Tradeboot/1.0; US stock scanner)",
+    }, method="GET")
+    with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        html = response.read().decode("utf-8", errors="replace")
+    parser = _ScreenerParser()
+    parser.feed(html)
+    candidates = []
+    for row in parser.rows:
+        symbol = row.get("symbol", "")
+        cells = row.get("cells") or []
+        if not _valid_symbol(symbol) or len(cells) < 10:
+            continue
+        try:
+            price = float(cells[8].replace("$", "").replace(",", ""))
+            change = float(cells[9].replace("%", "").replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+        if not 1.0 <= price <= 20.0:
+            continue
+        candidates.append({
+            "symbol": symbol, "country": "United States",
+            "exchange": "", "price": price, "percent_change": change,
+            "provider": "finviz",
+        })
+    return sorted(candidates, key=lambda item: item["percent_change"], reverse=True)
+
+
 def get_global_candidates(now=None, limit=None):
     """Return bounded US-listed candidates from Schwab NASDAQ/NYSE market movers."""
     global _COUNTRY_CURSOR, _LAST_GOOD_US_CANDIDATES
@@ -240,6 +305,17 @@ def get_global_candidates(now=None, limit=None):
                 except Exception as exc:
                     yahoo_error = type(exc).__name__
 
+            finviz_error = None
+            if not candidates:
+                try:
+                    candidates = _get_finviz_us_gainers()
+                    if candidates:
+                        scanner_provider = "finviz"
+                except (HTTPError, URLError, TimeoutError, OSError, ValueError, UnicodeError) as exc:
+                    finviz_error = type(exc).__name__
+                except Exception as exc:
+                    finviz_error = type(exc).__name__
+
             stale_candidates_used = False
             if candidates:
                 _LAST_GOOD_US_CANDIDATES = (current, list(candidates))
@@ -263,12 +339,13 @@ def get_global_candidates(now=None, limit=None):
                         "twelve_data_status": "skipped_plan_basic",
                         "schwab_errors": failures[:2],
                         "yahoo_error": yahoo_error,
+                        "finviz_error": finviz_error,
                     }
                 elif candidates:
                     diag = {
                         "status": "ok",
                         "provider": scanner_provider,
-                        "detail": "us_day_gainers_fallback" if scanner_provider == "yahoo_finance" else "us_exchange_movers",
+                        "detail": ("us_day_gainers_fallback" if scanner_provider == "yahoo_finance" else ("finviz_us_screener_fallback" if scanner_provider == "finviz" else "us_exchange_movers")),
                         "candidate_count": len(candidates),
                         "twelve_data_status": "skipped_plan_basic",
                         "schwab_errors": failures[:2],
