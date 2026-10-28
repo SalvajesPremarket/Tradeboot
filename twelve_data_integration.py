@@ -348,6 +348,16 @@ def get_quote(symbol, metadata=None):
 
 
 def _parse_timestamp(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            numeric = float(value)
+            stamp = datetime.fromtimestamp(
+                numeric / 1000 if numeric > 100000000000 else numeric,
+                timezone.utc,
+            )
+            return stamp
+        except (TypeError, ValueError, OverflowError, OSError):
+            return None
     if not isinstance(value, str) or not value.strip():
         return None
     try:
@@ -537,6 +547,32 @@ def get_scanner_context(symbol, now=None, metadata=None):
                 stamp = _parse_timestamp(published)
                 if isinstance(headline, str) and stamp:
                     news_rows.append({"published_at": stamp.isoformat(), "headline": headline[:500], "provider": "massive"})
+
+    # Last-resort no-key news feed: Yahoo Finance search exposes recent headlines
+    # without a paid news endpoint. Treat it as a headline source only; JeanLong still
+    # applies its own freshness and catalyst-keyword checks.
+    if not news_rows:
+        yahoo_url = "https://query1.finance.yahoo.com/v1/finance/search?" + urlencode({
+            "q": str(symbol).upper(), "newsCount": 10, "quotesCount": 0,
+            "enableFuzzyQuery": "false",
+        })
+        yahoo_status, yahoo_payload = _provider_json(yahoo_url, "", "yahoo")
+        yahoo_items = yahoo_payload.get("news") if isinstance(yahoo_payload, dict) else None
+        if yahoo_status == 200 and isinstance(yahoo_items, list):
+            for item in yahoo_items:
+                if not isinstance(item, dict):
+                    continue
+                related = item.get("relatedTickers")
+                if isinstance(related, list) and related and str(symbol).upper() not in [str(x).upper() for x in related]:
+                    continue
+                headline = item.get("title")
+                stamp = _parse_timestamp(item.get("providerPublishTime") or item.get("published_at"))
+                if isinstance(headline, str) and stamp:
+                    news_rows.append({
+                        "published_at": stamp.isoformat(),
+                        "headline": headline[:500],
+                        "provider": "yahoo_finance",
+                    })
 
     # Most recent first; deduplicate provider overlaps.
     deduped = {}
