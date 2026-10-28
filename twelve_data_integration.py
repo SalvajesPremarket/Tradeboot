@@ -526,6 +526,86 @@ def _get_yahoo_float(symbol):
         return None, "yahoo_" + type(exc).__name__
 
 
+def _get_finviz_float(symbol):
+    """Read only the explicitly labeled Float field from Finviz's public quote page.
+
+    This is a no-paid-plan fallback. It never substitutes shares outstanding or
+    market capitalization for float, and parsing failures simply return unavailable.
+    """
+    import re
+    from html.parser import HTMLParser
+
+    class _TableParser(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.in_td = False
+            self.in_tr = False
+            self.cell_parts = []
+            self.row = []
+            self.rows = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag.lower() == "tr":
+                self.in_tr = True
+                self.row = []
+            elif tag.lower() == "td" and self.in_tr:
+                self.in_td = True
+                self.cell_parts = []
+
+        def handle_data(self, data):
+            if self.in_td:
+                self.cell_parts.append(data)
+
+        def handle_endtag(self, tag):
+            tag = tag.lower()
+            if tag == "td" and self.in_td:
+                self.row.append(" ".join("".join(self.cell_parts).split()))
+                self.in_td = False
+                self.cell_parts = []
+            elif tag == "tr" and self.in_tr:
+                if self.row:
+                    self.rows.append(self.row)
+                self.row = []
+                self.in_tr = False
+
+    symbol = str(symbol or "").strip().upper()
+    if not symbol or not _valid_symbol(symbol):
+        return None, "finviz_invalid_symbol"
+    request = Request(
+        "https://finviz.com/quote.ashx?t=" + urlencode({"": symbol})[1:],
+        headers={
+            "Accept": "text/html,application/xhtml+xml",
+            "User-Agent": "Mozilla/5.0 (compatible; Tradeboot/1.0; read-only)",
+        },
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            html = response.read(2_000_000).decode("utf-8", errors="replace")
+        parser = _TableParser()
+        parser.feed(html)
+        for row in parser.rows:
+            for index, cell in enumerate(row[:-1]):
+                if cell.strip().lower().rstrip(":") != "float":
+                    continue
+                value = row[index + 1].strip().replace(",", "").upper()
+                match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KMB]?)", value)
+                if not match:
+                    continue
+                amount = float(match.group(1))
+                multiplier = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}[match.group(2)]
+                shares = int(amount * multiplier)
+                if shares > 0:
+                    return shares, None
+        return None, "finviz_float_field_unavailable"
+    except HTTPError as exc:
+        return None, "finviz_http_" + str(exc.code)
+    except (URLError, TimeoutError, OSError, UnicodeError):
+        return None, "finviz_unavailable"
+    except Exception as exc:
+        return None, "finviz_" + type(exc).__name__
+
+
 def _get_free_float(symbol, now=None):
     """Resolve actual float shares from free/read-only sources; never estimate."""
     symbol = str(symbol or "").strip().upper()
@@ -578,6 +658,19 @@ def _get_free_float(symbol, now=None):
         return result
 
     attempts.append(yahoo_error or "yahoo_float_unavailable")
+
+    shares, finviz_error = _get_finviz_float(symbol)
+    if shares:
+        result = {
+            "float_shares": shares, "provider": "finviz",
+            "effective_date": None, "status": "ok",
+        }
+        with _CACHE_LOCK:
+            _CACHE[cache_key] = (current + 21600, result)
+            _DIAGNOSTICS["float"] = {"status": "ok", "provider": "finviz"}
+        return result
+    attempts.append(finviz_error or "finviz_float_unavailable")
+
     result = {
         "float_shares": None, "provider": None,
         "status": "unavailable",
