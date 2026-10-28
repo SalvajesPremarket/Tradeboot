@@ -8,6 +8,8 @@ import json
 import os
 import threading
 import time
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -687,6 +689,41 @@ def get_scanner_context(symbol, now=None, metadata=None):
                     })
 
     news_rows = _fresh_rows(news_rows)
+
+    # Final free fallback: Google News RSS can surface recent small-cap catalyst
+    # coverage when provider press releases and Yahoo Finance search are empty.
+    # Headlines are evidence only; JeanLong still applies its freshness and
+    # catalyst-keyword rules before any paper entry is allowed.
+    if not news_rows:
+        rss_url = "https://news.google.com/rss/search?" + urlencode({
+            "q": '"' + str(symbol).upper() + '" stock',
+            "hl": "en-US", "gl": "US", "ceid": "US:en",
+        })
+        try:
+            request = Request(rss_url, headers={
+                "Accept": "application/rss+xml, application/xml, text/xml",
+                "User-Agent": "Mozilla/5.0 (compatible; Tradeboot/1.0; +https://tradeboot-api.onrender.com)",
+            }, method="GET")
+            with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+                rss_root = ET.fromstring(response.read())
+            for item in rss_root.findall(".//item")[:10]:
+                headline = item.findtext("title")
+                published = item.findtext("pubDate")
+                try:
+                    stamp = parsedate_to_datetime(published) if published else None
+                    if stamp and stamp.tzinfo is None:
+                        stamp = stamp.replace(tzinfo=timezone.utc)
+                except (TypeError, ValueError, OverflowError):
+                    stamp = None
+                if isinstance(headline, str) and headline.strip() and stamp:
+                    news_rows.append({
+                        "published_at": stamp.astimezone(timezone.utc).isoformat(),
+                        "headline": headline[:500],
+                        "provider": "google_news_rss",
+                    })
+        except (HTTPError, URLError, TimeoutError, OSError, ET.ParseError, UnicodeError):
+            pass
+        news_rows = _fresh_rows(news_rows)
 
     # Most recent first; deduplicate provider overlaps.
     deduped = {}
