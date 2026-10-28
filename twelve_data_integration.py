@@ -35,6 +35,8 @@ _COUNTRY_ROWS = {}
 _SYMBOL_META = {}
 _COUNTRY_CURSOR = 0
 _LAST_STATS_REQUEST = 0.0
+# Last successful US discovery list; symbol discovery only, never a substitute for fresh quotes.
+_LAST_GOOD_US_CANDIDATES = (0.0, [])
 
 
 def _request_json(endpoint, params=None, cache_key=None, ttl_seconds=60):
@@ -131,7 +133,7 @@ def _country_list():
 
 def get_global_candidates(now=None, limit=None):
     """Return bounded US-listed candidates from Schwab NASDAQ/NYSE market movers."""
-    global _COUNTRY_CURSOR
+    global _COUNTRY_CURSOR, _LAST_GOOD_US_CANDIDATES
     if not _API_KEY and _ENABLE_PAID_ENDPOINTS:
         _DIAGNOSTICS["market_movers/stocks"] = {"status": "missing_api_key", "provider": "twelve_data"}
         return []
@@ -142,6 +144,11 @@ def get_global_candidates(now=None, limit=None):
         current = time.monotonic()
         with _CACHE_LOCK:
             cached = _CACHE.get(cache_key)
+            # Keep a non-empty result available for a short outage grace period.
+            if cached and isinstance(cached[1], list) and cached[1]:
+                cached_fetched_at = cached[0] - 60
+                if current - cached_fetched_at <= 900:
+                    _LAST_GOOD_US_CANDIDATES = (cached_fetched_at, list(cached[1]))
         if cached and cached[0] > current:
             # Apply the same bound to cached and freshly fetched candidates.
             # Otherwise a full cache can bypass the free-plan cycle limit.
@@ -233,10 +240,31 @@ def get_global_candidates(now=None, limit=None):
                 except Exception as exc:
                     yahoo_error = type(exc).__name__
 
+            stale_candidates_used = False
+            if candidates:
+                _LAST_GOOD_US_CANDIDATES = (current, list(candidates))
+            else:
+                last_good_at, last_good = _LAST_GOOD_US_CANDIDATES
+                if last_good and current - last_good_at <= 900:
+                    candidates = list(last_good)
+                    scanner_provider = "last_known_us_candidates"
+                    stale_candidates_used = True
+
             with _CACHE_LOCK:
                 for item in candidates:
                     _SYMBOL_META[item["symbol"]] = item
-                if candidates:
+                if candidates and stale_candidates_used:
+                    diag = {
+                        "status": "stale_fallback",
+                        "provider": scanner_provider,
+                        "detail": "last_known_us_candidates_after_temporary_provider_failure",
+                        "candidate_count": len(candidates),
+                        "candidate_age_seconds": int(current - _LAST_GOOD_US_CANDIDATES[0]),
+                        "twelve_data_status": "skipped_plan_basic",
+                        "schwab_errors": failures[:2],
+                        "yahoo_error": yahoo_error,
+                    }
+                elif candidates:
                     diag = {
                         "status": "ok",
                         "provider": scanner_provider,
