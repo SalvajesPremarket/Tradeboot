@@ -176,17 +176,82 @@ def get_global_candidates(now=None, limit=None):
                     }
                     merged[symbol] = item
             candidates = sorted(merged.values(), key=lambda item: item["percent_change"], reverse=True)
+            scanner_provider = "schwab"
+            yahoo_error = None
+
+            # If Schwab OAuth is expired/rejected, keep the US-only scanner alive with
+            # Yahoo Finance's US day-gainers screener. This is discovery data only:
+            # the trading engine still requires its separate fresh quote/tick checks.
+            if not candidates:
+                yahoo_url = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?" + urlencode({
+                    "formatted": "false", "scrIds": "day_gainers", "count": 100,
+                    "region": "US", "lang": "en-US",
+                })
+                try:
+                    request = Request(
+                        yahoo_url,
+                        headers={
+                            "Accept": "application/json",
+                            "User-Agent": "Mozilla/5.0 (compatible; Tradeboot/1.0; US stock scanner)",
+                        },
+                        method="GET",
+                    )
+                    with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+                        yahoo_payload = json.loads(response.read().decode("utf-8"))
+                    finance = yahoo_payload.get("finance", {}) if isinstance(yahoo_payload, dict) else {}
+                    result_rows = finance.get("result") if isinstance(finance, dict) else None
+                    quotes = result_rows[0].get("quotes", []) if isinstance(result_rows, list) and result_rows and isinstance(result_rows[0], dict) else []
+                    for row in quotes if isinstance(quotes, list) else []:
+                        if not isinstance(row, dict):
+                            continue
+                        symbol = str(row.get("symbol") or "").strip().upper()
+                        if not _valid_symbol(symbol) or row.get("quoteType") not in (None, "EQUITY"):
+                            continue
+                        try:
+                            price = float(row.get("regularMarketPrice"))
+                            change = float(row.get("regularMarketChangePercent"))
+                        except (TypeError, ValueError):
+                            continue
+                        if not (1.0 <= price <= 20.0):
+                            continue
+                        item = {
+                            "symbol": symbol, "country": "United States",
+                            "exchange": str(row.get("exchange") or ""),
+                            "price": price, "percent_change": change,
+                            "provider": "yahoo_finance",
+                            "market_time": row.get("regularMarketTime"),
+                        }
+                        merged[symbol] = item
+                    candidates = sorted(merged.values(), key=lambda item: item["percent_change"], reverse=True)
+                    scanner_provider = "yahoo_finance"
+                except (HTTPError, URLError, TimeoutError, OSError, ValueError, UnicodeError) as exc:
+                    yahoo_error = type(exc).__name__
+                except Exception as exc:
+                    yahoo_error = type(exc).__name__
+
             with _CACHE_LOCK:
                 for item in candidates:
                     _SYMBOL_META[item["symbol"]] = item
-                _DIAGNOSTICS["market_movers/stocks"] = {
-                    "status": "ok" if candidates else ("schwab_unavailable" if failures else "no_usable_candidates"),
-                    "provider": "schwab",
-                    "detail": "us_exchange_movers_fallback",
-                    "candidate_count": len(candidates),
-                    "twelve_data_status": "skipped_plan_basic",
-                    "schwab_errors": failures[:2],
-                }
+                if candidates:
+                    diag = {
+                        "status": "ok",
+                        "provider": scanner_provider,
+                        "detail": "us_day_gainers_fallback" if scanner_provider == "yahoo_finance" else "us_exchange_movers",
+                        "candidate_count": len(candidates),
+                        "twelve_data_status": "skipped_plan_basic",
+                        "schwab_errors": failures[:2],
+                    }
+                else:
+                    diag = {
+                        "status": "all_candidate_sources_unavailable" if failures and yahoo_error else ("schwab_unavailable" if failures else "no_usable_candidates"),
+                        "provider": scanner_provider,
+                        "detail": "us_exchange_movers_fallback",
+                        "candidate_count": 0,
+                        "twelve_data_status": "skipped_plan_basic",
+                        "schwab_errors": failures[:2],
+                        "yahoo_error": yahoo_error,
+                    }
+                _DIAGNOSTICS["market_movers/stocks"] = diag
                 _CACHE[cache_key] = (current + 60, candidates)
             return [item["symbol"] for item in candidates[:max(1, min(50, int(limit or _CANDIDATE_LIMIT)))]]
         except Exception as exc:
