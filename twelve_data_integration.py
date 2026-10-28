@@ -629,12 +629,13 @@ def get_scanner_context(symbol, now=None, metadata=None):
             for item in yahoo_items:
                 if not isinstance(item, dict):
                     continue
-                related = item.get("relatedTickers")
-                if isinstance(related, list) and related and str(symbol).upper() not in [str(x).upper() for x in related]:
-                    continue
+                # Yahoo's search endpoint sometimes omits the queried ticker from
+                # relatedTickers even when the headline is returned for an exact-symbol
+                # query. Do not discard those headlines solely on that optional field;
+                # JeanLong still requires a fresh timestamp and a recognized catalyst.
                 headline = item.get("title")
                 stamp = _parse_timestamp(item.get("providerPublishTime") or item.get("published_at"))
-                if isinstance(headline, str) and stamp:
+                if isinstance(headline, str) and headline.strip() and stamp:
                     news_rows.append({
                         "published_at": stamp.isoformat(),
                         "headline": headline[:500],
