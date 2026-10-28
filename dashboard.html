@@ -221,6 +221,29 @@ $('account-logout').addEventListener('click',async()=>{await fetch('/auth/logout
 $('account-change-password').addEventListener('submit',async e=>{e.preventDefault();try{const r=await fetch('/auth/password',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_password:$('account-old-password').value,new_password:$('account-new-password').value})}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'No se pudo cambiar la contraseña');$('account-message').textContent='Contraseña cambiada. Vuelve a iniciar sesión.';$('account-old-password').value='';$('account-new-password').value='';await refreshAccount();}catch(e){$('account-message').textContent=e.message}});
 $('account-create-user').addEventListener('submit',async e=>{e.preventDefault();try{const r=await fetch('/auth/users',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:$('new-username').value,password:$('new-password').value,editor_enabled:$('new-editor-access').checked})}),d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'No se pudo crear usuario');$('new-username').value='';$('new-password').value='';$('new-editor-access').checked=false;$('account-message').textContent='Usuario creado; solicita que cambie la contraseña al ingresar.';await refreshAccountUsers();}catch(e){$('account-message').textContent=e.message}});
 
+// Poll the server session so a device displaced by a newer login is returned
+// to the login screen promptly. The server rejects its old token immediately.
+setInterval(async()=>{
+ if(!accountUser)return;
+ try{
+  const response=await fetch('/auth/me',{credentials:'same-origin',cache:'no-store'});
+  if(!response.ok)return;
+  const data=await response.json();
+  if(data.ok&&data.authenticated===false){
+   accountUser=null;cloudMode=false;
+   $('strategy-manager').hidden=true;
+   $('account-login-form').hidden=false;
+   $('account-logout').hidden=true;
+   $('account-change-password').hidden=true;
+   $('account-admin').hidden=true;
+   $('schwab-connect').hidden=true;
+   $('account-title').textContent='Sesión cerrada';
+   $('account-message').textContent='Esta cuenta se activó en otro dispositivo. Para continuar, inicia sesión aquí nuevamente.';
+   $('strategy-cloud-status').textContent='Sesión finalizada por inicio en otro dispositivo.';
+  }
+ }catch(_){}
+},5000);
+
 function renderStrategies(){
  $('strategy-count').textContent=strategies.length+' estrategia'+(strategies.length===1?'':'s');
  const list=$('strategy-list');
