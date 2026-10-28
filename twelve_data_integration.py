@@ -382,41 +382,124 @@ def _find_float_shares(payload):
     return None
 
 
-def get_scanner_context(symbol, now=None, metadata=None):
-    """Fetch press releases and float only when Twelve Data explicitly supplies a float field.
+def _provider_json(url, api_key, provider):
+    """Small read-only JSON request helper for optional free-tier providers."""
+    request = Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": "Tradeboot/1.0 (read-only market-data client)"},
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+            return int(response.status), payload
+    except HTTPError as exc:
+        return int(exc.code), None
+    except (URLError, TimeoutError, OSError, UnicodeError, json.JSONDecodeError):
+        return 502, None
 
-    Statistics requests are globally throttled to one per 30 seconds because the endpoint
-    is expensive (50 credits). Missing float/news never disables JeanLong's mandatory filters.
+
+def _get_free_float(symbol, now=None):
+    """Resolve actual free-float shares from a configured free-tier provider.
+
+    Prefer Massive's free Stocks float endpoint, then try FMP when configured.
+    Never substitute shares outstanding or an estimated dollar float for float shares.
+    Results are cached to stay within free API quotas.
     """
-    global _LAST_STATS_REQUEST
-    if not _API_KEY:
-        return {"provider": "twelve_data", "float_shares": None, "news": [], "diagnostic": {"status": "missing_api_key"}}
+    symbol = str(symbol or "").strip().upper()
+    cache_key = "free_float:" + symbol
+    current = time.monotonic()
+    with _CACHE_LOCK:
+        cached = _CACHE.get(cache_key)
+        if cached and cached[0] > current:
+            return cached[1]
+
+    massive_key = (
+        os.environ.get("MASSIVE_API_KEY")
+        or os.environ.get("POLYGON_API_KEY")
+        or ""
+    ).strip()
+    fmp_key = (
+        os.environ.get("FMP_API_KEY")
+        or os.environ.get("FINANCIAL_MODELING_PREP_API_KEY")
+        or ""
+    ).strip()
+    sources = []
+    if massive_key:
+        url = "https://api.massive.com/stocks/vX/float?" + urlencode({
+            "ticker": symbol, "apiKey": massive_key,
+        })
+        status, payload = _provider_json(url, massive_key, "massive")
+        results = payload.get("results") if isinstance(payload, dict) else None
+        row = results[0] if isinstance(results, list) and results and isinstance(results[0], dict) else {}
+        try:
+            shares = int(float(row.get("free_float")))
+        except (TypeError, ValueError, OverflowError):
+            shares = 0
+        effective = _parse_timestamp(row.get("effective_date")) if row.get("effective_date") else None
+        age_days = (datetime.now(timezone.utc).date() - effective.date()).days if effective else None
+        if status == 200 and shares > 0 and age_days is not None and -1 <= age_days <= 365:
+            result = {
+                "float_shares": shares, "provider": "massive",
+                "effective_date": effective.date().isoformat(),
+                "status": "ok",
+            }
+            with _CACHE_LOCK:
+                _CACHE[cache_key] = (current + 21600, result)
+                _DIAGNOSTICS["float"] = {
+                    "status": "ok", "provider": "massive",
+                    "effective_date": result["effective_date"],
+                }
+            return result
+        sources.append("massive_no_valid_float" if status == 200 else "massive_http_" + str(status))
+
+    if fmp_key:
+        url = "https://financialmodelingprep.com/stable/shares-float?" + urlencode({
+            "symbol": symbol, "apikey": fmp_key,
+        })
+        status, payload = _provider_json(url, fmp_key, "fmp")
+        rows = payload if isinstance(payload, list) else []
+        row = rows[0] if rows and isinstance(rows[0], dict) else {}
+        try:
+            shares = int(float(row.get("floatShares")))
+        except (TypeError, ValueError, OverflowError):
+            shares = 0
+        if status == 200 and shares > 0:
+            result = {
+                "float_shares": shares, "provider": "fmp",
+                "effective_date": str(row.get("date") or "")[:10] or None,
+                "status": "ok",
+            }
+            with _CACHE_LOCK:
+                _CACHE[cache_key] = (current + 21600, result)
+                _DIAGNOSTICS["float"] = {
+                    "status": "ok", "provider": "fmp",
+                    "effective_date": result["effective_date"],
+                }
+            return result
+        sources.append("fmp_no_valid_float" if status == 200 else "fmp_http_" + str(status))
+
+    if not massive_key and not fmp_key:
+        result = {"float_shares": None, "provider": None, "status": "provider_key_missing"}
+    else:
+        result = {"float_shares": None, "provider": None, "status": "unavailable", "attempts": sources}
+    with _CACHE_LOCK:
+        _CACHE[cache_key] = (current + 600, result)
+        _DIAGNOSTICS["float"] = dict(result)
+    return result
+
+
+def get_scanner_context(symbol, now=None, metadata=None):
+    """Fetch fresh catalyst headlines and actual free-float shares without paid endpoints.
+
+    Twelve Data press releases are available on Basic. Float lookup uses Massive's free
+    Stocks float endpoint when MASSIVE_API_KEY/POLYGON_API_KEY is configured, then FMP
+    if its key is configured. Missing or stale float is reported, never guessed.
+    """
     meta = metadata or get_symbol_metadata(symbol)
     params = _request_params_for_symbol(symbol, meta)
-    stats_key = "statistics:" + str(symbol).upper() + ":" + str(params.get("exchange", "")) + ":" + str(params.get("country", ""))
-    stats_payload = None
-    if _ENABLE_PAID_ENDPOINTS:
-        now_mono = time.monotonic()
-        with _CACHE_LOCK:
-            cached = _CACHE.get(stats_key)
-            if cached and cached[0] > now_mono:
-                stats_payload = cached[1][1] if cached[1][0] == 200 else None
-                should_request_stats = False
-            else:
-                should_request_stats = now_mono - _LAST_STATS_REQUEST >= 30
-                if should_request_stats:
-                    _LAST_STATS_REQUEST = now_mono
-        if should_request_stats:
-            stats_status, stats_payload = _request_json("statistics", params, stats_key, 21600)
-            if stats_status != 200:
-                stats_payload = None
-    else:
-        _DIAGNOSTICS["statistics"] = {
-            "status": "skipped_plan_basic",
-            "provider": "twelve_data",
-            "detail": "statistics_requires_paid_plan",
-        }
-    float_shares = _find_float_shares(stats_payload) if stats_payload else None
+    float_result = _get_free_float(symbol, now)
+    float_shares = float_result.get("float_shares")
 
     news_params = dict(params)
     news_params["outputsize"] = 10
@@ -433,10 +516,44 @@ def get_scanner_context(symbol, now=None, metadata=None):
                 published = row.get("published_at") or row.get("publishedDate") or row.get("datetime") or row.get("date")
                 stamp = _parse_timestamp(published)
                 if isinstance(headline, str) and stamp:
-                    news_rows.append({"published_at": stamp.isoformat(), "headline": headline[:500]})
+                    news_rows.append({"published_at": stamp.isoformat(), "headline": headline[:500], "provider": "twelve_data"})
+
+    # If the press-release feed has no usable rows, use Massive's public company-news
+    # endpoint only when a Massive/Polygon key already exists in the environment.
+    massive_key = (os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY") or "").strip()
+    if not news_rows and massive_key:
+        news_url = "https://api.massive.com/v2/reference/news?" + urlencode({
+            "ticker": str(symbol).upper(), "limit": 10, "sort": "published_utc.desc",
+            "apiKey": massive_key,
+        })
+        news_http, news_data = _provider_json(news_url, massive_key, "massive")
+        rows = news_data.get("results") if isinstance(news_data, dict) else None
+        if news_http == 200 and isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                headline = row.get("title")
+                published = row.get("published_utc") or row.get("published_at")
+                stamp = _parse_timestamp(published)
+                if isinstance(headline, str) and stamp:
+                    news_rows.append({"published_at": stamp.isoformat(), "headline": headline[:500], "provider": "massive"})
+
+    # Most recent first; deduplicate provider overlaps.
+    deduped = {}
+    for row in news_rows:
+        key = (row["published_at"], row["headline"].strip().lower())
+        deduped[key] = row
+    news_rows = sorted(deduped.values(), key=lambda row: row["published_at"], reverse=True)[:10]
     diagnostic = {
-        "status": "ok" if news_status == 200 else "press_releases_unavailable",
-        "float_available": float_shares is not None,
+        "status": "ok" if news_rows else ("press_releases_unavailable" if news_status != 200 else "no_fresh_headlines"),
+        "news_provider": news_rows[0].get("provider") if news_rows else None,
         "news_count": len(news_rows),
+        "float_available": float_shares is not None,
+        "float_provider": float_result.get("provider"),
+        "float_status": float_result.get("status"),
+        "float_effective_date": float_result.get("effective_date"),
     }
-    return {"provider": "twelve_data", "float_shares": float_shares, "news": news_rows, "diagnostic": diagnostic}
+    return {
+        "provider": "twelve_data", "float_shares": float_shares, "news": news_rows,
+        "diagnostic": diagnostic,
+    }
