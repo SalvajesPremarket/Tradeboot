@@ -941,6 +941,36 @@ class Handler(BaseHTTPRequestHandler):
                 details["program_skip_reason_counts"] = worker.get("program_skip_reason_counts", {})
                 details["program_scan_source"] = worker.get("program_scan_source")
                 details["program_engine_status"] = worker.get("program_engine_status")
+                # Surface the exact float/news provider outcomes next to JeanLong's
+                # rejection reasons so a missing-data block can be diagnosed without
+                # guessing or weakening any entry filter.
+                context_diagnostics = []
+                for evaluation in worker.get("program_evaluations", [])[:100]:
+                    context_diag = evaluation.get("scanner_context_diagnostic") or {}
+                    context_diagnostics.append({
+                        "symbol": evaluation.get("symbol"),
+                        "float_available": context_diag.get("float_available"),
+                        "float_provider": context_diag.get("float_provider"),
+                        "float_status": context_diag.get("float_status"),
+                        "news_count": context_diag.get("news_count"),
+                        "news_provider": context_diag.get("news_provider"),
+                        "news_status": context_diag.get("status"),
+                        "last_reject_reasons": evaluation.get("last_reject_reasons", []),
+                    })
+                details["scanner_context_diagnostics"] = context_diagnostics
+                details["scanner_context_summary"] = {
+                    "symbols_evaluated": len(context_diagnostics),
+                    "symbols_with_float": sum(1 for item in context_diagnostics if item.get("float_available")),
+                    "symbols_with_fresh_news": sum(1 for item in context_diagnostics if (item.get("news_count") or 0) > 0),
+                    "float_status_counts": {
+                        status: sum(1 for item in context_diagnostics if item.get("float_status") == status)
+                        for status in sorted({str(item.get("float_status")) for item in context_diagnostics if item.get("float_status")})
+                    },
+                    "news_status_counts": {
+                        status: sum(1 for item in context_diagnostics if item.get("news_status") == status)
+                        for status in sorted({str(item.get("news_status")) for item in context_diagnostics if item.get("news_status")})
+                    },
+                }
                 details["open_trades"] = int(trade_row[0] or 0)
                 details["closed_trades"] = int(trade_row[1] or 0)
                 details["total_trades"] = int(trade_row[2] or 0)
