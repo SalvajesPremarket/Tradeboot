@@ -586,7 +586,10 @@ def _get_finviz_float(symbol):
         parser.feed(html)
         for row in parser.rows:
             for index, cell in enumerate(row[:-1]):
-                if cell.strip().lower().rstrip(":") != "float":
+                # Finviz labels this statistic "Shs Float" on its quote table.
+                # Accept only explicit float labels; never use "Shs Outstand".
+                label = cell.strip().lower().rstrip(":")
+                if label not in {"float", "shs float", "shares float"}:
                     continue
                 value = row[index + 1].strip().replace(",", "").upper()
                 match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KMB]?)", value)
