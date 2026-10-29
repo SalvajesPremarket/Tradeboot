@@ -195,7 +195,7 @@ def run_cycle():
         ))
         program_skipped.append({
             "reason": "global_candidate_scan_unavailable",
-            "detail": "Twelve Data returned no usable global candidates; inspect scanner_diagnostic.",
+            "detail": "No US candidate source returned usable symbols; inspect scanner_diagnostic for provider-specific errors.",
             "scanner_context_provider": "twelve_data" if twelve_data_configured() else "missing_twelve_data_api_key",
             "scanner_diagnostic": scan_diagnostic,
         })
@@ -601,10 +601,15 @@ def run_cycle():
                                     "message": str(exc)[:180]})
 
     scan_diagnostic = get_twelve_data_diagnostics().get("market_movers/stocks", {})
-    if scan_diagnostic.get("provider") == "schwab":
-        scan_source = "schwab_us_market_movers"
-    else:
-        scan_source = "no_candidate_feed"
+    scan_provider = scan_diagnostic.get("provider")
+    scan_sources = {
+        "schwab": "schwab_us_market_movers",
+        "yahoo_finance": "yahoo_us_day_gainers",
+        "finviz": "finviz_us_screener",
+        "nasdaq_screener": "nasdaq_public_screener",
+        "last_known_us_candidates": "last_known_us_candidates",
+    }
+    scan_source = scan_sources.get(scan_provider, "no_candidate_feed")
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
                       "symbols":symbols,"formula_symbols":formula_symbols,"program_scan_symbols":program_symbols,
                       "program_scan_source":scan_source,
