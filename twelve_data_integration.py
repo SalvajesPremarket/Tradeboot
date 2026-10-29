@@ -388,6 +388,46 @@ def get_global_candidates(now=None, limit=None):
                     scanner_provider = "last_known_us_candidates"
                     stale_candidates_used = True
 
+            # Final recovery path: if every public screener and Schwab movers endpoint
+            # is temporarily unavailable, keep the strategy evaluating a small,
+            # explicitly US-listed stock seed. This is NOT labelled as market movers
+            # and cannot itself trigger an entry: live Schwab ticks, price/volume,
+            # float, catalyst and JeanLong pattern filters still have to pass.
+            if not candidates:
+                seed_symbols = ("SOFI", "NOK", "SNAP", "LCID", "OPEN", "CHPT")
+                seed_candidates = []
+                quote_errors = []
+                try:
+                    from schwab_integration import get_quotes
+                    quote_status, quote_payload = get_quotes(list(seed_symbols))
+                    quote_map = quote_payload.get("quotes", {}) if quote_status == 200 and isinstance(quote_payload, dict) else {}
+                    if not isinstance(quote_map, dict):
+                        quote_map = {}
+                    for symbol in seed_symbols:
+                        raw = quote_map.get(symbol)
+                        quote = raw.get("quote", raw) if isinstance(raw, dict) else {}
+                        try:
+                            price = float(quote.get("lastPrice") or quote.get("mark") or 0)
+                        except (TypeError, ValueError):
+                            price = 0
+                        if 1.0 <= price <= 20.0:
+                            seed_candidates.append({
+                                "symbol": symbol, "country": "United States",
+                                "exchange": "", "price": price, "percent_change": 0.0,
+                                "provider": "us_seed_fallback",
+                            })
+                    if not seed_candidates:
+                        quote_errors.append(str(quote_payload.get("error", "no_seed_quotes")) if isinstance(quote_payload, dict) else "invalid_quote_response")
+                except Exception as exc:
+                    quote_errors.append(type(exc).__name__)
+                if seed_candidates:
+                    candidates = seed_candidates
+                    scanner_provider = "us_seed_fallback"
+                    yahoo_error = yahoo_error or None
+                    nasdaq_errors = list(nasdaq_errors) + ["seed_quote_validation:ok"]
+                else:
+                    nasdaq_errors = list(nasdaq_errors) + ["seed_quote_validation:" + ",".join(quote_errors or ["no_valid_us_seed_quotes"])]
+
             with _CACHE_LOCK:
                 for item in candidates:
                     _SYMBOL_META[item["symbol"]] = item
