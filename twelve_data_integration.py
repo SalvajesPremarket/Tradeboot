@@ -444,13 +444,22 @@ def get_global_candidates(now=None, limit=None):
                         "finviz_error": finviz_error,
                     }
                 elif candidates:
+                    seed_fallback = scanner_provider == "us_seed_fallback"
                     diag = {
-                        "status": "ok",
+                        "status": "seed_fallback" if seed_fallback else "ok",
                         "provider": scanner_provider,
-                        "detail": ("us_day_gainers_fallback" if scanner_provider == "yahoo_finance" else ("finviz_us_screener_fallback" if scanner_provider == "finviz" else ("nasdaq_public_screener_fallback" if scanner_provider == "nasdaq_screener" else "us_exchange_movers"))),
+                        "detail": (
+                            "validated_us_seed_quotes_after_all_scanner_outages" if seed_fallback else
+                            ("us_day_gainers_fallback" if scanner_provider == "yahoo_finance" else
+                             ("finviz_us_screener_fallback" if scanner_provider == "finviz" else
+                              ("nasdaq_public_screener_fallback" if scanner_provider == "nasdaq_screener" else "us_exchange_movers")))
+                        ),
                         "candidate_count": len(candidates),
                         "twelve_data_status": "skipped_plan_basic",
                         "schwab_errors": failures[:2],
+                        "yahoo_error": yahoo_error,
+                        "finviz_error": finviz_error,
+                        "nasdaq_errors": nasdaq_errors,
                     }
                 else:
                     diag = {
