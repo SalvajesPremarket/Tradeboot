@@ -188,6 +188,7 @@ def run_cycle():
     skipped = []
     program_skipped = []
     program_evaluations = []
+    scanner_context_summaries = {}
     if active_programs and not program_symbols:
         scan_diagnostic = dict(get_twelve_data_diagnostics().get(
             "market_movers/stocks",
@@ -474,6 +475,17 @@ def run_cycle():
                 continue
             daily_volumes = [row["volume"] for row in daily_candles[-30:] if row["volume"] >= 0]
             scanner_context = get_scanner_context(symbol, started, symbol_meta)
+            context_diag = scanner_context.get("diagnostic", {})
+            scanner_context_summaries[symbol] = {
+                "float_available": bool(context_diag.get("float_available")),
+                "float_provider": context_diag.get("float_provider"),
+                "float_status": context_diag.get("float_status"),
+                "float_attempts": context_diag.get("float_attempts", []),
+                "news_status": context_diag.get("status"),
+                "news_provider": context_diag.get("news_provider"),
+                "news_count": context_diag.get("news_count", 0),
+                "news_latest_at": context_diag.get("news_latest_at"),
+            }
             context = {
                 "prev_close": daily_candles[-1]["close"] if daily_candles else None,
                 "avg_volume_30d": (sum(daily_volumes) / len(daily_volumes)) if daily_volumes else None,
