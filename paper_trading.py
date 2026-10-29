@@ -608,6 +608,7 @@ def run_cycle():
         "finviz": "finviz_us_screener",
         "nasdaq_screener": "nasdaq_public_screener",
         "last_known_us_candidates": "last_known_us_candidates",
+        "us_seed_fallback": "us_seed_fallback_live_quotes",
     }
     scan_source = scan_sources.get(scan_provider, "no_candidate_feed")
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
