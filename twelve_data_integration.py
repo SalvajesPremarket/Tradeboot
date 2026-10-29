@@ -196,6 +196,62 @@ def _get_finviz_us_gainers():
     return sorted(candidates, key=lambda item: item["percent_change"], reverse=True)
 
 
+def _get_nasdaq_us_candidates():
+    """Free US-listed equity discovery via Nasdaq's public screener API.
+
+    This endpoint is only a candidate-universe fallback. Its prices/changes are not
+    used as real-time entry quotes; JeanLong continues to require persisted live ticks.
+    """
+    merged = {}
+    errors = []
+    for exchange in ("nasdaq", "nyse"):
+        url = "https://api.nasdaq.com/api/screener/stocks?" + urlencode({
+            "tableonly": "true", "limit": "5000", "offset": "0", "exchange": exchange,
+        })
+        request = Request(url, headers={
+            "Accept": "application/json, text/plain, */*",
+            "Origin": "https://www.nasdaq.com",
+            "Referer": "https://www.nasdaq.com/",
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36",
+        }, method="GET")
+        try:
+            with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            data = payload.get("data") if isinstance(payload, dict) else None
+            rows = data.get("rows") if isinstance(data, dict) else None
+            if not isinstance(rows, list):
+                errors.append(exchange + ":unexpected_payload")
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                symbol = str(row.get("symbol") or "").strip().upper()
+                if not _valid_symbol(symbol):
+                    continue
+                try:
+                    price = float(str(row.get("lastsale") or "").replace("$", "").replace(",", ""))
+                    change = float(str(row.get("pctchange") or "").replace("%", "").replace(",", ""))
+                except (TypeError, ValueError):
+                    continue
+                if not 1.0 <= price <= 20.0:
+                    continue
+                # The scanner needs movers, so ignore flat/negative names in this
+                # fallback; the strategy still checks its independent premarket gap.
+                if change <= 0:
+                    continue
+                merged[symbol] = {
+                    "symbol": symbol, "country": "United States", "exchange": exchange.upper(),
+                    "price": price, "percent_change": change, "provider": "nasdaq_screener",
+                }
+        except HTTPError as exc:
+            errors.append(exchange + ":http_" + str(exc.code))
+        except (URLError, TimeoutError, OSError, ValueError, UnicodeError):
+            errors.append(exchange + ":request_failed")
+        except Exception as exc:
+            errors.append(exchange + ":" + type(exc).__name__)
+    return sorted(merged.values(), key=lambda item: item["percent_change"], reverse=True), errors
+
+
 def get_global_candidates(now=None, limit=None):
     """Return bounded US-listed candidates from Schwab NASDAQ/NYSE market movers."""
     global _COUNTRY_CURSOR, _LAST_GOOD_US_CANDIDATES
@@ -316,6 +372,12 @@ def get_global_candidates(now=None, limit=None):
                 except Exception as exc:
                     finviz_error = type(exc).__name__
 
+            nasdaq_errors = []
+            if not candidates:
+                candidates, nasdaq_errors = _get_nasdaq_us_candidates()
+                if candidates:
+                    scanner_provider = "nasdaq_screener"
+
             stale_candidates_used = False
             if candidates:
                 _LAST_GOOD_US_CANDIDATES = (current, list(candidates))
@@ -345,7 +407,7 @@ def get_global_candidates(now=None, limit=None):
                     diag = {
                         "status": "ok",
                         "provider": scanner_provider,
-                        "detail": ("us_day_gainers_fallback" if scanner_provider == "yahoo_finance" else ("finviz_us_screener_fallback" if scanner_provider == "finviz" else "us_exchange_movers")),
+                        "detail": ("us_day_gainers_fallback" if scanner_provider == "yahoo_finance" else ("finviz_us_screener_fallback" if scanner_provider == "finviz" else ("nasdaq_public_screener_fallback" if scanner_provider == "nasdaq_screener" else "us_exchange_movers"))),
                         "candidate_count": len(candidates),
                         "twelve_data_status": "skipped_plan_basic",
                         "schwab_errors": failures[:2],
@@ -359,6 +421,8 @@ def get_global_candidates(now=None, limit=None):
                         "twelve_data_status": "skipped_plan_basic",
                         "schwab_errors": failures[:2],
                         "yahoo_error": yahoo_error,
+                        "finviz_error": finviz_error,
+                        "nasdaq_errors": nasdaq_errors,
                     }
                 _DIAGNOSTICS["market_movers/stocks"] = diag
                 _CACHE[cache_key] = (current + 60, candidates)
