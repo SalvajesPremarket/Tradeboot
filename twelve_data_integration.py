@@ -1049,9 +1049,11 @@ def get_scanner_context(symbol, now=None, metadata=None):
         "status": "ok" if news_rows else ("press_releases_unavailable" if news_status != 200 else "no_fresh_headlines"),
         "news_provider": news_rows[0].get("provider") if news_rows else None,
         "news_count": len(news_rows),
+        "news_latest_at": news_rows[0].get("published_at") if news_rows else None,
         "float_available": float_shares is not None,
         "float_provider": float_result.get("provider"),
         "float_status": float_result.get("status"),
+        "float_attempts": float_result.get("attempts", []),
         "float_effective_date": float_result.get("effective_date"),
     }
     return {
