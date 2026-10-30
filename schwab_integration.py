@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
@@ -17,6 +18,7 @@ from strategy_store import _connect, StrategyStoreUnavailable
 OAUTH_BASE = "https://api.schwabapi.com/v1/oauth"
 MARKET_DATA_BASE = "https://api.schwabapi.com/marketdata/v1"
 TIMEOUT_SECONDS = 15
+_TOKEN_REFRESH_LOCK = threading.Lock()
 
 
 def _config():
@@ -134,8 +136,17 @@ def _token_request(form):
         with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        # Never return the upstream response body; it may contain sensitive diagnostics.
-        raise ValueError("schwab_token_exchange_rejected_" + str(exc.code))
+        # Extract only a recognized OAuth error code; never log or return provider text.
+        reason = ""
+        try:
+            body = exc.read(8192).decode("utf-8", errors="replace")
+            import re
+            match = re.search(r'"error"\s*:\s*"(invalid_grant|invalid_client|unsupported_token_type|invalid_request|unauthorized_client|access_denied)"', body)
+            if match:
+                reason = "_" + match.group(1)
+        except Exception:
+            pass
+        raise ValueError("schwab_token_exchange_rejected_" + str(exc.code) + reason)
     except (URLError, TimeoutError, OSError, ValueError, UnicodeError):
         raise ValueError("schwab_token_service_unavailable")
     if not isinstance(payload, dict) or not payload.get("access_token"):
@@ -179,28 +190,31 @@ def _access_token():
     if not client_id or not client_secret:
         raise ValueError("schwab_oauth_environment_not_configured")
     _fernet()
-    try:
-        tokens = _load_tokens()
-    except StrategyStoreUnavailable:
-        raise ValueError("schwab_token_storage_unavailable")
-    except Exception as exc:
-        if isinstance(exc, ValueError):
-            raise
-        raise ValueError("schwab_token_storage_unavailable")
-    access_token = tokens.get("access_token")
-    expires_at = int(tokens.get("expires_at") or 0)
-    if access_token and expires_at > int(time.time()) + 90:
-        return access_token
-    refresh_token = tokens.get("refresh_token")
-    if not refresh_token:
-        raise ValueError("schwab_authorization_required")
-    refreshed = _token_request({"grant_type": "refresh_token", "refresh_token": refresh_token})
-    if not refreshed.get("refresh_token"):
-        # Do not overwrite a working refresh token with an incomplete rotation response.
-        refreshed["refresh_token"] = refresh_token
-        _save_tokens(refreshed)
-    return refreshed["access_token"]
-
+    # Both the strategy cycle and tick collector can request quotes concurrently.
+    # Schwab rotates refresh tokens, so refresh must be serialized and tokens reloaded
+    # after acquiring the lock to avoid sending the same refresh token twice.
+    with _TOKEN_REFRESH_LOCK:
+        try:
+            tokens = _load_tokens()
+        except StrategyStoreUnavailable:
+            raise ValueError("schwab_token_storage_unavailable")
+        except Exception as exc:
+            if isinstance(exc, ValueError):
+                raise
+            raise ValueError("schwab_token_storage_unavailable")
+        access_token = tokens.get("access_token")
+        expires_at = int(tokens.get("expires_at") or 0)
+        if access_token and expires_at > int(time.time()) + 90:
+            return access_token
+        refresh_token = tokens.get("refresh_token")
+        if not refresh_token:
+            raise ValueError("schwab_authorization_required")
+        refreshed = _token_request({"grant_type": "refresh_token", "refresh_token": refresh_token})
+        if not refreshed.get("refresh_token"):
+            # Do not overwrite a working refresh token with an incomplete rotation response.
+            refreshed["refresh_token"] = refresh_token
+            _save_tokens(refreshed)
+        return refreshed["access_token"]
 
 def get_status():
     client_id, client_secret, redirect_uri = _config()
