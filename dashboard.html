@@ -457,6 +457,11 @@ async function runPaperSelfTest(){
   const details=data.details||{};
   lines.push('Resultado: '+data.overall+' · Correctos: '+(summary.passed||0)+' · Avisos: '+(summary.warnings||0)+' · Fallos: '+(summary.failed||0));
   lines.push('Origen del escáner: '+(details.program_scan_source||'sin dato')+' · Evaluaciones: '+(details.evaluations??0)+' · Ticks reales recientes: '+(details.recent_tick_count??0));
+  const worker=details.worker||{};
+  if(worker.scanner_diagnostic)lines.push('Diagnóstico del proveedor del escáner: '+JSON.stringify(worker.scanner_diagnostic));
+  if(Array.isArray(worker.program_scan_symbols))lines.push('Símbolos candidatos: '+(worker.program_scan_symbols.join(', ')||'ninguno'));
+  const tick=details.tick_collector||worker.tick_collector||{};
+  if(Object.keys(tick).length)lines.push('Colector de cotizaciones Schwab: '+JSON.stringify(tick));
   lines.push('Operaciones: '+(details.open_trades??0)+' abiertas · '+(details.closed_trades??0)+' cerradas · Acciones de las últimas 24 h: '+JSON.stringify(details.recent_actions_24h||{}));
   if(details.program_skip_reason_counts&&Object.keys(details.program_skip_reason_counts).length)lines.push('JeanLong · conteo de descartes por motivo: '+JSON.stringify(details.program_skip_reason_counts));
   if(details.skip_reason_counts&&Object.keys(details.skip_reason_counts).length)lines.push('Conteo de descartes por motivo (escáner general): '+JSON.stringify(details.skip_reason_counts));
