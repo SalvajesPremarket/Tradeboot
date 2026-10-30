@@ -623,6 +623,24 @@ def run_cycle():
         "us_seed_fallback": "us_seed_fallback_live_quotes",
     }
     scan_source = scan_sources.get(scan_provider, "no_candidate_feed")
+    scan_log = {
+        "source": scan_source,
+        "provider": scan_diagnostic.get("provider"),
+        "status": scan_diagnostic.get("status"),
+        "detail": scan_diagnostic.get("detail"),
+        "candidate_count": scan_diagnostic.get("candidate_count", len(program_symbols)),
+        "symbols": program_symbols,
+        "schwab_errors": scan_diagnostic.get("schwab_errors", []),
+        "yahoo_error": scan_diagnostic.get("yahoo_error"),
+        "finviz_error": scan_diagnostic.get("finviz_error"),
+        "nasdaq_errors": scan_diagnostic.get("nasdaq_errors", []),
+        "evaluations": evaluated,
+        "skip_reason_counts": {
+            reason: sum(1 for item in program_skipped if item.get("reason") == reason)
+            for reason in sorted({item.get("reason", "unknown") for item in program_skipped})
+        },
+    }
+    print("Tradeboot scanner diagnostic: " + json.dumps(scan_log, ensure_ascii=False, sort_keys=True), flush=True)
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
                       "symbols":symbols,"formula_symbols":formula_symbols,"program_scan_symbols":program_symbols,
                       "program_scan_source":scan_source,
@@ -751,6 +769,15 @@ def _tick_collector_loop():
                 "detail": quote_error if quote_status not in (200, None) else None,
                 "interval_seconds": _TICK_COLLECTOR_INTERVAL_SECONDS,
             })
+            if not persisted_ticks:
+                print("Tradeboot tick collector diagnostic: " + json.dumps({
+                    "status": "no_symbols" if not symbols else "no_fresh_quotes",
+                    "symbols": symbols,
+                    "quotes_received": received_quotes,
+                    "quote_http_status": quote_status,
+                    "detail": quote_error if quote_status not in (200, None) else None,
+                    "max_quote_age_seconds": _TICK_MAX_AGE_SECONDS,
+                }, ensure_ascii=False, sort_keys=True), flush=True)
         except Exception as exc:
             # Keep the collector isolated: a quote/API issue must not stop the strategy worker.
             try:

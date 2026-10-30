@@ -912,6 +912,7 @@ class Handler(BaseHTTPRequestHandler):
                 state = {key: json.loads(value) for key, value, _ in state_rows}
                 worker = state.get("worker", {})
                 details["worker"] = worker
+                details["tick_collector"] = state.get("tick_collector", {})
                 add_check("paper_only", worker.get("trading_mode", "paper_only") == "paper_only" and worker.get("real_orders_enabled") is False,
                           "Modo paper_only; órdenes reales deshabilitadas." if worker.get("real_orders_enabled") is False else "No se pudo confirmar que las órdenes reales estén deshabilitadas.")
                 last_cycle = worker.get("last_cycle_at")
