@@ -1139,8 +1139,15 @@ class Handler(BaseHTTPRequestHandler):
         self._dispatch(head_only=True)
 
     def log_message(self, fmt, *args):
-        # Keep logs free of request payloads and potentially sensitive data.
-        super().log_message(fmt, *args)
+        # OAuth callback query strings contain one-time authorization codes.
+        # Redact them before writing the request line to Render logs.
+        safe_args = list(args)
+        if len(safe_args) >= 3 and isinstance(safe_args[2], str):
+            parts = safe_args[2].split(" ", 2)
+            if len(parts) == 3 and parts[1].startswith("/schwab/callback?"):
+                parts[1] = "/schwab/callback?[REDACTED]"
+                safe_args[2] = " ".join(parts)
+        super().log_message(fmt, *safe_args)
 
 
 if __name__ == "__main__":
