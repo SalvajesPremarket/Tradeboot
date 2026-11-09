@@ -86,9 +86,8 @@ def calculate_performance_metrics(trades, equity_curve, initial_capital, *,
         peak = max(peak, equity)
         drawdown = peak - equity
         drawdown_pct = drawdown / peak if peak else 0.0
-        if drawdown_pct > max_drawdown_pct:
-            max_drawdown_pct = drawdown_pct
-            max_drawdown = drawdown
+        max_drawdown = max(max_drawdown, drawdown)
+        max_drawdown_pct = max(max_drawdown_pct, drawdown_pct)
         returns.append(equity / previous_equity - 1.0)
         previous_equity = equity
 
