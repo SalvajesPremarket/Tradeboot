@@ -439,7 +439,9 @@ async function refreshPaperTrading(){
    '<td style="padding:9px">'+paperEscape(t.status)+'</td>'+
    '<td style="padding:9px">'+paperMoney(t.entry_price)+'</td>'+
    '<td style="padding:9px">'+(t.order_type==='LIMIT'?'LIMIT · '+paperEscape(t.time_in_force||'DAY')+' · '+(t.extended_hours?'EXT':'RTH')+' · límite '+paperMoney(t.limit_price):'—')+'</td>'+
+   '<td style="padding:9px">'+paperMoney(t.mark_price)+'</td>'+
    '<td style="padding:9px">'+paperMoney(t.exit_price)+'</td>'+
+   '<td style="padding:9px">'+paperMoney(t.unrealized_pnl_usd)+'</td>'+
    '<td style="padding:9px">'+paperMoney(t.pnl_usd)+'</td>'+
    '<td style="padding:9px">'+paperEscape(t.exit_reason||'—')+'</td></tr>').join(''):'<tr><td colspan="12" class="empty">Todavía no hay operaciones. El motor no abrirá operaciones si faltan datos de mercado válidos.</td></tr>';
  }catch(e){
