@@ -111,8 +111,20 @@ SIZER_CONFIG: dict[str, Any] = {
 # PARTE 1 - CONTEXTO DIARIO / SEMANAL
 # ============================================================================
 def to_weekly(df_daily: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate daily bars into completed Friday-ending weeks only.
+
+    The worker excludes today's partial daily bar, but that still leaves a
+    partial current-week aggregate from Monday through the prior session.
+    Never treat that partial aggregate as a completed weekly candle.
+    """
     agg = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-    return df_daily.resample("W-FRI").agg(agg).dropna(subset=["close"])
+    if df_daily is None or df_daily.empty:
+        return pd.DataFrame(columns=list(agg))
+    clean = df_daily.sort_index().dropna(subset=["open", "high", "low", "close"])
+    weekly = clean.resample("W-FRI").agg(agg).dropna(subset=["close"])
+    if not clean.empty and clean.index[-1].weekday() != 4 and not weekly.empty:
+        weekly = weekly.iloc[:-1]
+    return weekly
 
 
 def daily_context(df: pd.DataFrame, info: dict, timeframe: str = "D", cfg: dict | None = None) -> dict:
@@ -121,10 +133,14 @@ def daily_context(df: pd.DataFrame, info: dict, timeframe: str = "D", cfg: dict 
     out = {"armed": False, "timeframe": timeframe, "symbol": info.get("symbol"),
            "levels": [], "level_names": [], "metrics": {}, "reasons": []}
     try:
-        if df is None or len(df) < tf["min_bars"]:
+        if df is None or len(df) == 0:
             out["reasons"].append("pocas velas")
             return out
-        df = df.sort_index().dropna(subset=["open", "high", "low", "close"])
+        df = df.sort_index()
+        df = df[~df.index.duplicated(keep="last")].dropna(subset=["open", "high", "low", "close"])
+        if len(df) < tf["min_bars"]:
+            out["reasons"].append("pocas velas completas")
+            return out
         close = df["close"]
         mid = close.rolling(cfg["bb_period"]).mean()
         sd = close.rolling(cfg["bb_period"]).std(ddof=0)
@@ -134,17 +150,37 @@ def daily_context(df: pd.DataFrame, info: dict, timeframe: str = "D", cfg: dict 
         atr = float(tr.ewm(alpha=1 / cfg["atr_period"], adjust=False).mean().iloc[-1])
         last, prev = df.iloc[-1], df.iloc[-2]
         price = float(last["close"])
+        if not math.isfinite(atr) or atr <= 0 or not math.isfinite(price) or price <= 0:
+            out["reasons"].append("ATR o precio diario no valido")
+            return out
         lo = float(lower.iloc[-1])
 
         # filtros basicos (tus filtros de la Estrategia 2)
-        if cfg["price_min"] is not None and not (cfg["price_min"] <= price <= cfg["price_max"]):
-            out["reasons"].append(f"precio fuera de ${cfg['price_min']}-${cfg['price_max']}")
-        avg_vol = float(info.get("avg_volume_30d") or df["volume"].iloc[-20:].mean() / tf["vol_divisor"])
-        if cfg["min_avg_daily_volume"] is not None and avg_vol < cfg["min_avg_daily_volume"]:
-            out["reasons"].append(f"volumen < {cfg['min_avg_daily_volume']:,}")
+        if ((cfg["price_min"] is not None and price < cfg["price_min"])
+                or (cfg["price_max"] is not None and price > cfg["price_max"])):
+            out["reasons"].append(f"precio fuera del rango configurado")
+        if cfg["min_avg_daily_volume"] is not None:
+            raw_avg_vol = info.get("avg_volume_30d")
+            if raw_avg_vol is None:
+                raw_avg_vol = df["volume"].iloc[-20:].mean() / tf["vol_divisor"]
+            try:
+                avg_vol = float(raw_avg_vol)
+            except (TypeError, ValueError):
+                avg_vol = float("nan")
+            if not math.isfinite(avg_vol) or avg_vol <= 0:
+                out["reasons"].append("volumen promedio diario no disponible")
+            elif avg_vol < cfg["min_avg_daily_volume"]:
+                out["reasons"].append(f"volumen < {cfg['min_avg_daily_volume']:,}")
         fl = info.get("float_shares")
-        if cfg["float_max"] is not None and (not fl or fl > cfg["float_max"]):
-            out["reasons"].append("float desconocido o mayor al maximo")
+        if cfg["float_max"] is not None:
+            try:
+                float_shares = float(fl)
+            except (TypeError, ValueError):
+                float_shares = float("nan")
+            if not math.isfinite(float_shares) or float_shares <= 0:
+                out["reasons"].append("float desconocido o no valido")
+            elif float_shares > cfg["float_max"]:
+                out["reasons"].append("float mayor al maximo configurado")
 
         # swing desde la banda superior
         n, lb, gap = len(df), tf["swing_lookback"], tf["min_bars_since_touch"]
