@@ -139,34 +139,63 @@ def _state(key, value):
         """, (key, json.dumps(value, ensure_ascii=False), now))
 
 
+def _paper_pnl(side, entry_price, exit_price, quantity):
+    """Return signed simulation P/L for LONG and SHORT positions."""
+    direction = 1.0 if str(side).upper() == "LONG" else -1.0
+    return (float(exit_price) - float(entry_price)) * float(quantity) * direction
+
+
 def get_paper_status():
     try:
         with _connect() as conn:
             _init_tables(conn)
             rows = conn.execute("SELECT state_key,state_value,updated_at FROM tradeboot_paper_state").fetchall()
             trades = conn.execute("""
-                SELECT id,strategy_id,strategy_name,symbol,status,entry_price,exit_price,quantity,
-                       allocated_usd,stop_price,take_price,pnl_usd,entry_at,exit_at,exit_reason,side,
-                       order_type,time_in_force,extended_hours,limit_price
-                FROM tradeboot_paper_trades ORDER BY id DESC LIMIT 50
+                SELECT t.id,t.strategy_id,t.strategy_name,t.symbol,t.status,t.entry_price,t.exit_price,t.quantity,
+                       t.allocated_usd,t.stop_price,t.take_price,t.pnl_usd,t.entry_at,t.exit_at,t.exit_reason,t.side,
+                       t.order_type,t.time_in_force,t.extended_hours,t.limit_price,
+                       mark.price AS mark_price, mark.tick_at AS mark_at
+                FROM tradeboot_paper_trades t
+                LEFT JOIN LATERAL (
+                    SELECT price,tick_at FROM tradeboot_market_ticks
+                    WHERE symbol=t.symbol AND tick_at >= t.entry_at
+                    ORDER BY tick_at DESC LIMIT 1
+                ) mark ON TRUE
+                ORDER BY t.id DESC LIMIT 50
             """).fetchall()
             counts = conn.execute("""
-                SELECT COUNT(*) FILTER (WHERE status='OPEN'), COUNT(*) FILTER (WHERE status='CLOSED'),
-                       COALESCE(SUM(pnl_usd) FILTER (WHERE status='CLOSED'),0)
-                FROM tradeboot_paper_trades
+                SELECT COUNT(*) FILTER (WHERE t.status='OPEN'), COUNT(*) FILTER (WHERE t.status='CLOSED'),
+                       COALESCE(SUM(t.pnl_usd) FILTER (WHERE t.status='CLOSED'),0),
+                       COALESCE(SUM(CASE WHEN t.status='OPEN' AND mark.price IS NOT NULL
+                         THEN (CASE WHEN t.side='SHORT' THEN t.entry_price-mark.price ELSE mark.price-t.entry_price END)*t.quantity
+                         ELSE 0 END),0),
+                       COUNT(*) FILTER (WHERE t.status='OPEN' AND mark.price IS NOT NULL)
+                FROM tradeboot_paper_trades t
+                LEFT JOIN LATERAL (
+                    SELECT price FROM tradeboot_market_ticks
+                    WHERE symbol=t.symbol AND tick_at >= t.entry_at
+                    ORDER BY tick_at DESC LIMIT 1
+                ) mark ON TRUE
             """).fetchone()
         state = {k: {"value": json.loads(v), "updated_at": t.isoformat()} for k,v,t in rows}
         worker = state.get("worker", {}).get("value", {"status":"starting"})
         tick_collector = state.get("tick_collector", {}).get("value")
         if tick_collector:
             worker["tick_collector"] = tick_collector
+        realized_pnl = float(counts[2] or 0)
+        unrealized_pnl = float(counts[3] or 0)
         return {"ok": True, "mode": "paper_only", "worker": worker,
-                "open_trades": int(counts[0]), "closed_trades": int(counts[1]), "realized_pnl_usd": float(counts[2]),
+                "open_trades": int(counts[0]), "closed_trades": int(counts[1]),
+                "realized_pnl_usd": realized_pnl, "unrealized_pnl_usd": unrealized_pnl,
+                "total_pnl_usd": realized_pnl + unrealized_pnl,
+                "marked_open_trades": int(counts[4] or 0),
                 "trades": [{"id":r[0],"strategy_id":r[1],"strategy_name":r[2],"symbol":r[3],"status":r[4],
                   "entry_price":r[5],"exit_price":r[6],"quantity":r[7],"allocated_usd":r[8],"stop_price":r[9],
                   "take_price":r[10],"pnl_usd":r[11],"entry_at":r[12].isoformat(),"exit_at":r[13].isoformat() if r[13] else None,
                   "exit_reason":r[14],"side":r[15],"order_type":r[16],"time_in_force":r[17],
-                  "extended_hours":r[18],"limit_price":r[19]} for r in trades]}
+                  "extended_hours":r[18],"limit_price":r[19],"mark_price":r[20],
+                  "mark_at":r[21].isoformat() if r[21] else None,
+                  "unrealized_pnl_usd": ((float(r[20])-float(r[5])) if r[15] != "SHORT" else (float(r[5])-float(r[20])))*float(r[7]) if r[4]=="OPEN" and r[20] is not None else None} for r in trades]}
     except Exception as exc:
         # Keep the UI message safe while making the failure class diagnosable in Render logs/API.
         print(f"Tradeboot paper status query failed: {type(exc).__name__}", flush=True)
@@ -545,15 +574,6 @@ def run_cycle():
                                     premarket_time = eastern_event_time.time()
                                     if side != "LONG" or not (datetime.strptime("04:00", "%H:%M").time() <= premarket_time < datetime.strptime("16:00", "%H:%M").time()):
                                         continue
-                                inserted = conn.execute("""
-                                    INSERT INTO tradeboot_paper_events(strategy_id,symbol,action,event_at,reason)
-                                    VALUES (%s,%s,%s,%s,%s)
-                                    ON CONFLICT(strategy_id,symbol,action,event_at) DO NOTHING
-                                    RETURNING id
-                                """, (strategy["id"], symbol, action["action"], event_time, str(action.get("reason", ""))[:160])).fetchone()
-                                if not inserted:
-                                    continue
-                                new_actions += 1
                                 side = str(action.get("side", "LONG")).upper()
                                 price = action.get("price")
                                 if not isinstance(price, (int, float)) or not __import__("math").isfinite(price) or price <= 0:
@@ -564,7 +584,10 @@ def run_cycle():
                                     WHERE strategy_id=%s AND symbol=%s AND status='OPEN'
                                     ORDER BY id DESC LIMIT 1 FOR UPDATE
                                 """, (strategy["id"], symbol)).fetchone()
-                                if action["action"] == "ENTER" and not open_row:
+                                if action["action"] == "ENTER":
+                                    # Do not consume an idempotency key until the entry can actually be funded.
+                                    if open_row:
+                                        continue
                                     allocation = capital * float(strategy.get("allocationPercent", 10)) / 100
                                     used = conn.execute("""
                                         SELECT COALESCE(SUM(allocated_usd),0) FROM tradeboot_paper_trades
@@ -573,6 +596,15 @@ def run_cycle():
                                     budget = max(0.0, allocation - float(used or 0))
                                     if budget <= 0:
                                         continue
+                                    inserted = conn.execute("""
+                                        INSERT INTO tradeboot_paper_events(strategy_id,symbol,action,event_at,reason)
+                                        VALUES (%s,%s,%s,%s,%s)
+                                        ON CONFLICT(strategy_id,symbol,action,event_at) DO NOTHING
+                                        RETURNING id
+                                    """, (strategy["id"], symbol, action["action"], event_time, str(action.get("reason", ""))[:160])).fetchone()
+                                    if not inserted:
+                                        continue
+                                    new_actions += 1
                                     stop = action.get("stop")
                                     if not isinstance(stop, (int, float)) or stop <= 0:
                                         stop = price * (1 - _STOP_PCT / 100 if side == "LONG" else 1 + _STOP_PCT / 100)
@@ -590,14 +622,36 @@ def run_cycle():
                                           round(price * 1.01, 2) if is_jean_long else None))
                                 elif action["action"] == "MOVE_STOP" and open_row:
                                     old_stop = float(open_row[4])
-                                    improves = price > 0 and ((side == "LONG" and isinstance(action.get("stop"), (int,float)) and action["stop"] > old_stop)
-                                                              or (side == "SHORT" and isinstance(action.get("stop"), (int,float)) and action["stop"] < old_stop))
-                                    if improves:
-                                        conn.execute("UPDATE tradeboot_paper_trades SET stop_price=%s,last_quote_at=%s WHERE id=%s",
-                                                     (action["stop"],event_time,open_row[0]))
+                                    new_stop = action.get("stop")
+                                    improves = isinstance(new_stop, (int, float)) and __import__("math").isfinite(new_stop) and (
+                                        (side == "LONG" and new_stop > old_stop)
+                                        or (side == "SHORT" and new_stop < old_stop)
+                                    )
+                                    if not improves:
+                                        continue
+                                    inserted = conn.execute("""
+                                        INSERT INTO tradeboot_paper_events(strategy_id,symbol,action,event_at,reason)
+                                        VALUES (%s,%s,%s,%s,%s)
+                                        ON CONFLICT(strategy_id,symbol,action,event_at) DO NOTHING
+                                        RETURNING id
+                                    """, (strategy["id"], symbol, action["action"], event_time, str(action.get("reason", ""))[:160])).fetchone()
+                                    if not inserted:
+                                        continue
+                                    new_actions += 1
+                                    conn.execute("UPDATE tradeboot_paper_trades SET stop_price=%s,last_quote_at=%s WHERE id=%s",
+                                                 (new_stop,event_time,open_row[0]))
                                 elif action["action"] == "EXIT" and open_row:
+                                    inserted = conn.execute("""
+                                        INSERT INTO tradeboot_paper_events(strategy_id,symbol,action,event_at,reason)
+                                        VALUES (%s,%s,%s,%s,%s)
+                                        ON CONFLICT(strategy_id,symbol,action,event_at) DO NOTHING
+                                        RETURNING id
+                                    """, (strategy["id"], symbol, action["action"], event_time, str(action.get("reason", ""))[:160])).fetchone()
+                                    if not inserted:
+                                        continue
+                                    new_actions += 1
                                     trade_id, entry, quantity, allocated, old_stop, open_side = open_row
-                                    pnl = ((price - entry) if open_side == "LONG" else (entry - price)) * quantity
+                                    pnl = _paper_pnl(open_side, entry, price, quantity)
                                     conn.execute("""
                                         UPDATE tradeboot_paper_trades SET status='CLOSED',exit_price=%s,pnl_usd=%s,
                                         exit_at=%s,exit_reason=%s,last_quote_at=%s WHERE id=%s
