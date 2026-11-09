@@ -422,7 +422,7 @@ async function refreshPaperTrading(){
   if(!response.ok||!data.ok)throw new Error(data.error||'Almacenamiento de paper trading no disponible');
   const worker=data.worker||{};
   $('paper-worker-status').textContent=worker.status||'sin estado';
-  $('paper-worker-time').textContent=worker.last_cycle_at?'Último ciclo: '+new Date(worker.last_cycle_at).toLocaleString('es-CR',{hour12:false}):'Aún no hay un ciclo registrado';
+  $('paper-worker-time').textContent=worker.last_cycle_at?'Último ciclo: '+new Date(worker.last_cycle_at).toLocaleString('en-US',{timeZone:'America/New_York',hour12:false}):'Aún no hay un ciclo registrado';
   $('paper-counts').textContent=String(data.open_trades??0)+' / '+String(data.closed_trades??0);
   $('paper-pnl').textContent=paperMoney(data.realized_pnl_usd);
   $('paper-message').textContent='Modo '+(data.mode||'paper_only')+' · '+String(worker.active_program_strategies??0)+' motores Python activos · '+String(worker.active_formula_strategies??0)+' estrategias de fórmula activas · órdenes reales deshabilitadas.';
