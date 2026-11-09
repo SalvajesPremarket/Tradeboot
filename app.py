@@ -311,6 +311,33 @@ def fetch_market_context(symbol):
     }
 
 
+def _strategy_activity_diagnostics(enabled_strategies, worker):
+    """Summarize enabled formula/Python strategies without assuming JeanLong is enabled."""
+    enabled_strategies = [item for item in enabled_strategies if item.get("enabled")]
+    formula = [item for item in enabled_strategies if item.get("strategyType", "formula") == "formula"]
+    programs = [item for item in enabled_strategies if item.get("strategyType") == "python_program"]
+    program_rows = worker.get("program_evaluations", []) or []
+    counts = {}
+    for row in program_rows:
+        strategy_id = row.get("strategy_id")
+        if strategy_id:
+            counts[strategy_id] = counts.get(strategy_id, 0) + 1
+    formula_evaluations = int(worker.get("evaluations", 0) or 0)
+    program_evaluations = len(program_rows)
+    return {
+        "active_formula_strategies": [{"id": item.get("id"), "name": item.get("name")} for item in formula],
+        "active_python_strategies": [{"id": item.get("id"), "name": item.get("name")} for item in programs],
+        "jeanlong_enabled": any("jeanlong" in str(item.get("name", "")).lower() for item in programs),
+        "formula_evaluations": formula_evaluations,
+        "program_evaluations": program_evaluations,
+        "evaluations_total": formula_evaluations + program_evaluations,
+        "evaluations_by_strategy": [
+            {"id": item.get("id"), "name": item.get("name"), "evaluations": counts.get(item.get("id"), 0)}
+            for item in programs
+        ],
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def _json(self, status, payload, head_only=False, extra_headers=None):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -926,16 +953,37 @@ class Handler(BaseHTTPRequestHandler):
                 add_check("worker_cycle", cycle_age is not None and cycle_age <= max(180, int(worker.get("next_cycle_seconds", 5)) * 6),
                           "Último ciclo hace %s segundos." % (round(cycle_age) if cycle_age is not None else "desconocido"), "warning")
                 enabled = [s for s in list_strategies() if s.get("enabled")]
-                jean = [s for s in enabled if "jeanlong" in str(s.get("name", "")).lower()]
-                add_check("jeanlong_enabled", bool(jean), "JeanLong activa." if jean else "JeanLong no aparece activa en las estrategias guardadas.", "warning")
+                activity = _strategy_activity_diagnostics(enabled, worker)
+                details["active_strategies"] = activity["active_formula_strategies"] + activity["active_python_strategies"]
+                details["active_formula_strategies"] = activity["active_formula_strategies"]
+                details["active_python_strategies"] = activity["active_python_strategies"]
+                details["jeanlong_enabled"] = activity["jeanlong_enabled"]
+                details["evaluations_by_strategy"] = activity["evaluations_by_strategy"]
+                add_check(
+                    "active_python_strategies",
+                    bool(activity["active_python_strategies"]),
+                    "Estrategias Python activas: %s." % (
+                        ", ".join(item["name"] for item in activity["active_python_strategies"]) or "ninguna"
+                    ),
+                    "warning",
+                )
                 add_check("candidate_scan", bool(worker.get("program_scan_symbols")), "Candidatos configurados: %s." % len(worker.get("program_scan_symbols", [])), "warning")
                 ticks_count, latest_tick = tick_row
                 details["recent_tick_count"] = int(ticks_count or 0)
                 details["latest_tick_at"] = latest_tick.isoformat() if latest_tick else None
                 add_check("live_schwab_ticks", bool(ticks_count), "Cotizaciones reales persistidas en los últimos 10 minutos: %s." % int(ticks_count or 0), "warning")
-                evaluated = int(worker.get("evaluations", 0) or 0)
+                evaluated = activity["evaluations_total"]
                 details["evaluations"] = evaluated
-                add_check("strategy_evaluation", evaluated > 0, "Evaluaciones en el último ciclo: %s." % evaluated, "warning")
+                details["formula_evaluations"] = activity["formula_evaluations"]
+                details["program_evaluations"] = activity["program_evaluations"]
+                add_check(
+                    "strategy_evaluation",
+                    evaluated > 0,
+                    "Evaluaciones en el último ciclo: %s (fórmula: %s; Python: %s)." % (
+                        evaluated, activity["formula_evaluations"], activity["program_evaluations"]
+                    ),
+                    "warning",
+                )
                 details["skipped"] = worker.get("skipped", [])[:30]
                 # Keep Python scanner diagnostics separate: formula-watchlist skips must not hide JeanLong.
                 details["program_skipped"] = worker.get("program_skipped", [])[:100]
