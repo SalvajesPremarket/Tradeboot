@@ -952,6 +952,15 @@ class Handler(BaseHTTPRequestHandler):
                 details["last_cycle_age_seconds"] = cycle_age
                 add_check("worker_cycle", cycle_age is not None and cycle_age <= max(180, int(worker.get("next_cycle_seconds", 5)) * 6),
                           "Último ciclo hace %s segundos." % (round(cycle_age) if cycle_age is not None else "desconocido"), "warning")
+                paper_capital = get_general_capital()
+                details["paper_capital_usd"] = paper_capital
+                add_check(
+                    "paper_capital_configured",
+                    paper_capital > 0,
+                    "Capital ficticio configurado: $%.2f." % paper_capital if paper_capital > 0
+                    else "Capital ficticio en $0. Configura el capital de Paper Trading para permitir nuevas entradas.",
+                    "warning",
+                )
                 enabled = [s for s in list_strategies() if s.get("enabled")]
                 activity = _strategy_activity_diagnostics(enabled, worker)
                 details["active_strategies"] = activity["active_formula_strategies"] + activity["active_python_strategies"]
