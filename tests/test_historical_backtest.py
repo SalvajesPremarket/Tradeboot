@@ -1,6 +1,6 @@
 import unittest
 
-from historical_backtest import apply_execution_costs, calculate_performance_metrics
+from historical_backtest import BacktestEngine, apply_execution_costs, calculate_performance_metrics
 
 
 class HistoricalBacktestMetricsTests(unittest.TestCase):
@@ -43,6 +43,22 @@ class HistoricalBacktestMetricsTests(unittest.TestCase):
         )
         self.assertLess(long_trade["net_pnl_usd"], 10)
         self.assertLess(short_trade["net_pnl_usd"], 10)
+
+    def test_engine_is_isolated_and_applies_costs(self):
+        result = BacktestEngine(
+            1000, slippage_bps=5, commission_per_share=0.01
+        ).run(
+            [{"side": "LONG", "entry_price": 10, "exit_price": 11,
+              "quantity": 10, "entry_at": "2024-01-02T10:00:00-05:00",
+              "exit_at": "2024-01-02T10:30:00-05:00"}],
+            [{"date": "2024-01-02", "equity": 1009.80},
+             {"date": "2024-01-03", "equity": 1010.00},
+             {"date": "2024-01-04", "equity": 1008.00}],
+        )
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["real_orders_enabled"])
+        self.assertFalse(result["paper_ledger_touched"])
+        self.assertLess(result["trades"][0]["net_pnl_usd"], 10)
 
     def test_rejects_duplicate_daily_equity_dates(self):
         with self.assertRaises(ValueError):
