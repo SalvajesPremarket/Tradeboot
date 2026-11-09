@@ -977,6 +977,34 @@ class Handler(BaseHTTPRequestHandler):
                     "warning",
                 )
                 add_check("candidate_scan", bool(worker.get("program_scan_symbols")), "Candidatos configurados: %s." % len(worker.get("program_scan_symbols", [])), "warning")
+                # Read-only Schwab history probe: one 10-year daily request and one
+                # 10-trading-day 1-minute request. No bars are written to PostgreSQL.
+                try:
+                    from schwab_integration import audit_historical_data
+                    history_http_status, history_audit = audit_historical_data("SPY")
+                    details["schwab_historical_data"] = history_audit
+                    daily_history = history_audit.get("daily", {})
+                    minute_history = history_audit.get("intraday", {})
+                    daily_coverage = daily_history.get("coverage") or {}
+                    minute_coverage = minute_history.get("coverage") or {}
+                    add_check(
+                        "schwab_historical_daily_10y",
+                        bool(daily_history.get("http_ok") and (daily_coverage.get("count") or 0) > 0),
+                        "Schwab diario 10 años: %s velas recibidas." % int(daily_coverage.get("count") or 0)
+                        if daily_history.get("http_ok") else "Histórico diario Schwab no disponible: %s." % (daily_history.get("error") or "error HTTP %s" % daily_history.get("http_status")),
+                        "warning",
+                    )
+                    add_check(
+                        "schwab_historical_intraday",
+                        bool(minute_history.get("http_ok") and (minute_coverage.get("count") or 0) > 0),
+                        "Schwab intradía 1 minuto: %s velas recibidas en la ventana solicitada." % int(minute_coverage.get("count") or 0)
+                        if minute_history.get("http_ok") else "Histórico intradía Schwab no disponible: %s." % (minute_history.get("error") or "error HTTP %s" % minute_history.get("http_status")),
+                        "warning",
+                    )
+                except Exception as history_exc:
+                    details["schwab_historical_data"] = {"ok": False, "error": type(history_exc).__name__, "persisted": False}
+                    add_check("schwab_historical_daily_10y", False, "No se pudo comprobar el histórico Schwab: %s." % type(history_exc).__name__, "warning")
+                    add_check("schwab_historical_intraday", False, "No se pudo comprobar el histórico intradía Schwab.", "warning")
                 ticks_count, latest_tick = tick_row
                 details["recent_tick_count"] = int(ticks_count or 0)
                 details["latest_tick_at"] = latest_tick.isoformat() if latest_tick else None
