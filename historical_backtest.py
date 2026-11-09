@@ -164,3 +164,53 @@ def apply_execution_costs(trade, *, slippage_bps=0.0, commission_per_share=0.0):
         "commissions_usd": commissions,
         "net_pnl_usd": gross - commissions,
     }
+
+
+class BacktestEngine:
+    """Isolated execution-cost and portfolio-metrics engine.
+
+    It accepts strategy-generated closed trades plus a daily mark-to-market
+    equity curve. It does not load, mutate, or reuse the production paper ledger.
+    """
+
+    def __init__(self, initial_capital, *, slippage_bps=0.0, commission_per_share=0.0,
+                 risk_free_rate=0.0, periods_per_year=252):
+        self.initial_capital = _finite(initial_capital, "initial_capital")
+        if self.initial_capital <= 0:
+            raise ValueError("initial_capital must be positive.")
+        self.slippage_bps = _finite(slippage_bps, "slippage_bps")
+        self.commission_per_share = _finite(commission_per_share, "commission_per_share")
+        self.risk_free_rate = _finite(risk_free_rate, "risk_free_rate")
+        self.periods_per_year = periods_per_year
+        if self.slippage_bps < 0 or self.commission_per_share < 0:
+            raise ValueError("Execution costs must be nonnegative.")
+
+    def run(self, closed_trades, daily_equity_curve):
+        if not isinstance(closed_trades, list):
+            raise ValueError("closed_trades must be a list.")
+        executed = [
+            apply_execution_costs(
+                trade, slippage_bps=self.slippage_bps,
+                commission_per_share=self.commission_per_share,
+            )
+            for trade in closed_trades
+        ]
+        metrics = calculate_performance_metrics(
+            executed, daily_equity_curve, self.initial_capital,
+            risk_free_rate=self.risk_free_rate,
+            periods_per_year=self.periods_per_year,
+        )
+        return {
+            "ok": True,
+            "engine": "tradeboot_isolated_historical_backtest",
+            "mode": "backtest_only",
+            "initial_capital_usd": self.initial_capital,
+            "execution_costs": {
+                "slippage_bps_per_side": self.slippage_bps,
+                "commission_per_share_per_side_usd": self.commission_per_share,
+            },
+            "trades": executed,
+            "metrics": metrics,
+            "real_orders_enabled": False,
+            "paper_ledger_touched": False,
+        }
