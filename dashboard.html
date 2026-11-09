@@ -459,8 +459,11 @@ async function runPaperSelfTest(){
   const data=await response.json();
   if(!response.ok||!data.checks)throw new Error(data.error==='strategy_editor_access_required'?'Inicia sesión con una cuenta autorizada para ejecutar el test.':data.error||'No se pudo completar el test.');
   const summary=data.summary||{};
-  const lines=(data.checks||[]).map(item=>(item.status==='passed'?'✓ ':item.status==='warning'?'⚠ ':'✕ ')+item.name+': '+item.detail);
   const details=data.details||{};
+  const checks=data.checks||[];
+  const activePythonNames=(details.active_python_strategies||[]).map(item=>item&&item.name).filter(Boolean);
+  const activeStrategyCheckIndex=checks.findIndex(item=>item.name==='active_python_strategies');
+  const lines=checks.map(item=>(item.status==='passed'?'✓ ':item.status==='warning'?'⚠ ':'✕ ')+item.name+': '+item.detail);
   lines.push('Resultado: '+data.overall+' · Correctos: '+(summary.passed||0)+' · Avisos: '+(summary.warnings||0)+' · Fallos: '+(summary.failed||0));
   lines.push('Origen del escáner: '+(details.program_scan_source||'sin dato')+' · Evaluaciones: '+(details.evaluations??0)+' · Ticks reales recientes: '+(details.recent_tick_count??0));
   const worker=details.worker||{};
@@ -475,7 +478,14 @@ async function runPaperSelfTest(){
   if(Array.isArray(details.program_skipped)&&details.program_skipped.length)lines.push('Últimos descartes de estrategias Python: '+details.program_skipped.slice(0,12).map(x=>x.symbol+': '+x.reason+(x.diagnostics? ' ('+JSON.stringify(x.diagnostics)+')':'')+(x.detail? ' ('+x.detail+')':'')).join(' | '));
   if(Array.isArray(details.scanner_context_diagnostics)&&details.scanner_context_diagnostics.length)lines.push('Diagnóstico de datos por símbolo: '+details.scanner_context_diagnostics.slice(0,8).map(x=>x.symbol+': float='+(x.float_available?'OK':'NO')+'/'+(x.float_status||'sin estado')+(x.float_provider?' vía '+x.float_provider:'')+(Array.isArray(x.float_attempts)&&x.float_attempts.length?' ['+x.float_attempts.join(', ')+']':'')+'; noticias='+(x.news_status||'sin estado')+'/'+(x.news_provider||'sin proveedor')+' ('+(x.news_count??0)+')'+(x.news_latest_at?' última='+x.news_latest_at:'')).join(' | '));
   if(Array.isArray(details.skipped)&&details.skipped.length)lines.push('Últimos descartes del escáner general: '+details.skipped.slice(0,8).map(x=>x.symbol+': '+x.reason+(x.detail? ' ('+x.detail+')':'')).join(' | '));
-  output.textContent=lines.join('\n');
+  output.innerHTML=lines.map((line,index)=>{
+   if(index===activeStrategyCheckIndex&&activePythonNames.length){
+    const prefix='Estrategias Python activas: ';
+    const names=activePythonNames.map(name=>'<span style="color:#22c55e;font-weight:700;background:rgba(34,197,94,.12);padding:2px 6px;border-radius:5px">'+paperEscape(name)+'</span>').join(', ');
+    return paperEscape('✓ active_python_strategies: '+prefix)+names+'.';
+   }
+   return paperEscape(line);
+  }).join('<br>');
  }catch(e){output.textContent='Test no completado: '+e.message}
  finally{button.disabled=false}
 }
