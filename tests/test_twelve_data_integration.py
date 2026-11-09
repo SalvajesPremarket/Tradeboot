@@ -41,12 +41,13 @@ class TwelveDataIntegrationTests(unittest.TestCase):
 
     def test_basic_plan_skips_twelve_data_paid_endpoint_when_all_candidate_sources_are_unavailable(self):
         with patch("schwab_integration.get_market_movers", return_value=(503, {"error": "schwab_authorization_required"})):
-            with self._disable_public_fallbacks()[0], self._disable_public_fallbacks()[1], self._disable_public_fallbacks()[2], self._disable_public_fallbacks()[3]:
+            fallback_patches = self._disable_public_fallbacks()
+            with fallback_patches[0], fallback_patches[1], fallback_patches[2], fallback_patches[3]:
                 with patch.object(td, "_request_json") as request:
                     self.assertEqual(td.get_global_candidates(limit=25), [])
         request.assert_not_called()
         diagnostic = td.get_diagnostics()["market_movers/stocks"]
-        self.assertEqual(diagnostic["status"], "schwab_unavailable")
+        self.assertEqual(diagnostic["status"], "all_candidate_sources_unavailable")
         self.assertEqual(diagnostic["twelve_data_status"], "skipped_plan_basic")
 
     def test_basic_plan_uses_schwab_even_without_twelve_data_api_key(self):
@@ -85,7 +86,7 @@ class TwelveDataIntegrationTests(unittest.TestCase):
             fallback_patches = self._disable_public_fallbacks()
             with fallback_patches[0], fallback_patches[1], fallback_patches[2], fallback_patches[3]:
                 self.assertEqual(td.get_global_candidates(limit=25), [])
-        self.assertEqual(td.get_diagnostics()["market_movers/stocks"]["status"], "schwab_unavailable")
+        self.assertEqual(td.get_diagnostics()["market_movers/stocks"]["status"], "all_candidate_sources_unavailable")
 
     def test_global_candidates_filter_invalid_prices_and_keep_market_metadata(self):
         td._ENABLE_PAID_ENDPOINTS = True
