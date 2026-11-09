@@ -30,10 +30,20 @@ class TwelveDataIntegrationTests(unittest.TestCase):
         td._SYMBOL_META.clear()
         td._DIAGNOSTICS.clear()
 
-    def test_basic_plan_skips_twelve_data_paid_endpoint_and_uses_no_fallback_when_schwab_unavailable(self):
+    def _disable_public_fallbacks(self):
+        """Make outage tests deterministic without making real HTTP requests."""
+        return (
+            patch.object(td, "urlopen", side_effect=OSError("network disabled in test")),
+            patch.object(td, "_get_finviz_us_gainers", return_value=[]),
+            patch.object(td, "_get_nasdaq_us_candidates", return_value=([], [])),
+            patch("schwab_integration.get_quotes", return_value=(503, {"error": "quotes_unavailable"})),
+        )
+
+    def test_basic_plan_skips_twelve_data_paid_endpoint_when_all_candidate_sources_are_unavailable(self):
         with patch("schwab_integration.get_market_movers", return_value=(503, {"error": "schwab_authorization_required"})):
-            with patch.object(td, "_request_json") as request:
-                self.assertEqual(td.get_global_candidates(limit=25), [])
+            with self._disable_public_fallbacks()[0], self._disable_public_fallbacks()[1], self._disable_public_fallbacks()[2], self._disable_public_fallbacks()[3]:
+                with patch.object(td, "_request_json") as request:
+                    self.assertEqual(td.get_global_candidates(limit=25), [])
         request.assert_not_called()
         diagnostic = td.get_diagnostics()["market_movers/stocks"]
         self.assertEqual(diagnostic["status"], "schwab_unavailable")
@@ -70,9 +80,11 @@ class TwelveDataIntegrationTests(unittest.TestCase):
         self.assertEqual(td.get_symbol_metadata("SMALL")["provider"], "schwab")
         self.assertEqual(td.get_diagnostics()["market_movers/stocks"]["provider"], "schwab")
 
-    def test_basic_plan_reports_no_candidates_when_schwab_unavailable(self):
+    def test_basic_plan_reports_no_candidates_when_all_sources_are_unavailable(self):
         with patch("schwab_integration.get_market_movers", return_value=(503, {"error": "schwab_authorization_required"})):
-            self.assertEqual(td.get_global_candidates(limit=25), [])
+            fallback_patches = self._disable_public_fallbacks()
+            with fallback_patches[0], fallback_patches[1], fallback_patches[2], fallback_patches[3]:
+                self.assertEqual(td.get_global_candidates(limit=25), [])
         self.assertEqual(td.get_diagnostics()["market_movers/stocks"]["status"], "schwab_unavailable")
 
     def test_global_candidates_filter_invalid_prices_and_keep_market_metadata(self):
