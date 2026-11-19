@@ -851,6 +851,7 @@ def _tick_collector_loop():
             received_quotes = 0
             persisted_ticks = 0
             symbol_diagnostics = []
+            rows = []
             if symbols:
                 status, payload = get_quotes(symbols)
                 quote_status = status
