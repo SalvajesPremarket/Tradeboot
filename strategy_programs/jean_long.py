@@ -111,19 +111,6 @@ CONFIG: dict[str, Any] = {
     "volume_max": 500_000,         # volumen acumulado estricto: debe ser menor de 500 mil
 }
 
-CATALYSTS: dict[str, tuple[str, ...]] = {
-    "earnings": ("earnings", "quarter", "q1", "q2", "q3", "q4", "revenue", "eps",
-                 "guidance", "resultados", "ganancias", "trimestre"),
-    "fda": ("fda", "phase", "trial", "approval", "approves", "clearance", "nda", "bla",
-            "aprobacion", "aprobación", "ensayo"),
-    "contrato": ("contract", "award", "government", "department of", "pentagon", "dod",
-                 "contrato", "gobierno"),
-    "fusion": ("merger", "acquisition", "acquire", "acquires", "buyout", "takeover",
-               "fusion", "fusión", "adquisicion", "adquisición"),
-    "alianza": ("partnership", "partners", "collaboration", "agreement", "alliance",
-                "alianza", "acuerdo", "asociacion", "asociación"),
-}
-
 # ----------------------------------------------------------------------------
 # Indicadores incrementales
 # ----------------------------------------------------------------------------
