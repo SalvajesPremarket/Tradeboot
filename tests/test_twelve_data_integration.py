@@ -34,7 +34,6 @@ class TwelveDataIntegrationTests(unittest.TestCase):
         """Make outage tests deterministic without making real HTTP requests."""
         return (
             patch.object(td, "urlopen", side_effect=OSError("network disabled in test")),
-            patch.object(td, "_get_finviz_us_gainers", return_value=[]),
             patch.object(td, "_get_nasdaq_us_candidates", return_value=([], [])),
             patch("schwab_integration.get_quotes", return_value=(503, {"error": "quotes_unavailable"})),
         )
@@ -42,7 +41,7 @@ class TwelveDataIntegrationTests(unittest.TestCase):
     def test_basic_plan_skips_twelve_data_paid_endpoint_when_all_candidate_sources_are_unavailable(self):
         with patch("schwab_integration.get_market_movers", return_value=(503, {"error": "schwab_authorization_required"})):
             fallback_patches = self._disable_public_fallbacks()
-            with fallback_patches[0], fallback_patches[1], fallback_patches[2], fallback_patches[3]:
+            with fallback_patches[0], fallback_patches[1], fallback_patches[2]:
                 with patch.object(td, "_request_json") as request:
                     self.assertEqual(td.get_global_candidates(limit=25), [])
         request.assert_not_called()
@@ -104,6 +103,15 @@ class TwelveDataIntegrationTests(unittest.TestCase):
     def test_float_parser_does_not_mistake_shares_outstanding_for_float(self):
         self.assertIsNone(td._find_float_shares({"shares_outstanding": 1000000}))
         self.assertEqual(td._find_float_shares({"statistics": {"float_shares": "12500000"}}), 12500000)
+
+    def test_float_lookup_returns_unavailable_when_authorized_sources_have_no_float(self):
+        with patch.dict("os.environ", {"MASSIVE_API_KEY": "", "POLYGON_API_KEY": ""}, clear=False):
+            with patch.object(td, "_get_yahoo_float", return_value=(None, "yahoo_float_unavailable")):
+                with patch.object(td, "urlopen", side_effect=AssertionError("unexpected external request")):
+                    result = td._get_free_float("NOFLOAT")
+        self.assertIsNone(result["float_shares"])
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["attempts"], ["yahoo_float_unavailable"])
 
     def test_quote_is_normalized_to_paper_scanner_fields(self):
         with patch.object(td, "_request_json", return_value=(200, {
