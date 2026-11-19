@@ -7,7 +7,7 @@ import os
 import threading
 import time
 import traceback
-from datetime import datetime, timedelta, timezone, time as dtime
+from datetime import datetime, timedelta, timezone
 
 from strategy_store import _connect, list_strategies, get_general_capital
 from strategy_engine import evaluate_formula, StrategyFormulaError
@@ -591,11 +591,7 @@ def run_cycle():
             # Use prior regular-session close as volume baseline; feed today's ticks to candle logic.
             local_now = quote_received_at.astimezone(eastern)
             day_start = datetime.combine(local_now.date(), datetime.min.time(), tzinfo=eastern)
-            close_cutoff = (
-                datetime.combine(local_now.date(), dtime(16, 0), tzinfo=eastern)
-                if local_now.timetz().replace(tzinfo=None) >= dtime(16, 0) else day_start
-            )
-            with _connect() as conn:
+            close_cutoff = day_start  # Always use the last session close before today's date.\n            with _connect() as conn:
                 _init_tables(conn)
                 baseline = conn.execute("""
                     SELECT tick_at,day_volume FROM tradeboot_market_ticks
