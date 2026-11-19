@@ -83,7 +83,7 @@ class TwelveDataIntegrationTests(unittest.TestCase):
     def test_basic_plan_reports_no_candidates_when_all_sources_are_unavailable(self):
         with patch("schwab_integration.get_market_movers", return_value=(503, {"error": "schwab_authorization_required"})):
             fallback_patches = self._disable_public_fallbacks()
-            with fallback_patches[0], fallback_patches[1], fallback_patches[2], fallback_patches[3]:
+            with fallback_patches[0], fallback_patches[1], fallback_patches[2]:
                 self.assertEqual(td.get_global_candidates(limit=25), [])
         self.assertEqual(td.get_diagnostics()["market_movers/stocks"]["status"], "all_candidate_sources_unavailable")
 
