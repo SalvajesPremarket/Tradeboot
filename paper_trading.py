@@ -600,16 +600,23 @@ def run_cycle():
                 if previous_session_date else None
             )
             volume_window_end = now_minute.astimezone(eastern)
-            cumulative_volume, volume_window_error = _volume_since_previous_close(
-                minute_rows, previous_session_date, now_minute, eastern
-            )
+            if history_provider == "schwab":
+                cumulative_volume, volume_window_error = _volume_since_previous_close(
+                    minute_rows, previous_session_date, now_minute, eastern
+                )
+            else:
+                # Twelve Data fallback history is not guaranteed to include extended hours.
+                # Never use it to claim a complete prior-close volume total.
+                cumulative_volume = None
+                volume_window_error = "schwab_extended_hours_history_required"
             with _connect() as conn:
                 _init_tables(conn)
                 tick_rows = conn.execute("""
                     SELECT tick_at,price FROM tradeboot_market_ticks
                     WHERE symbol=%s AND tick_at >= %s AND tick_at <= %s
-                    ORDER BY tick_at ASC LIMIT 5000
+                    ORDER BY tick_at DESC LIMIT 5000
                 """, (symbol, day_start.astimezone(timezone.utc), quote_received_at + timedelta(seconds=10))).fetchall()
+            tick_rows.reverse()
             ticks = [{
                 "price": float(row[1]),
                 "timestamp": row[0].astimezone(timezone.utc).isoformat(),
