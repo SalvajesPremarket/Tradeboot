@@ -111,6 +111,38 @@ def _quote_timestamp_audit(quote, received_at, max_age_seconds=_TICK_MAX_AGE_SEC
     }
 
 
+def _volume_window_ticks(rows, baseline_at, day_start):
+    """Convert cumulative quote-volume snapshots into volume since prior 16:00 ET close."""
+    import math
+    if not rows or baseline_at is None or rows[0][0] != baseline_at:
+        return [], None, "previous_close_baseline_missing"
+    try:
+        previous = float(rows[0][2])
+    except (TypeError, ValueError, OverflowError):
+        return [], None, "previous_close_volume_missing"
+    if not math.isfinite(previous) or previous < 0:
+        return [], None, "previous_close_volume_invalid"
+    cumulative = 0.0
+    current_day_ticks = []
+    for tick_at, price, raw_volume in rows[1:]:
+        if raw_volume is not None:
+            try:
+                current = float(raw_volume)
+            except (TypeError, ValueError, OverflowError):
+                current = None
+            if current is not None and math.isfinite(current) and current >= 0:
+                increment = current - previous if current >= previous else current
+                cumulative += max(0.0, increment)
+                previous = current
+        if tick_at >= day_start:
+            current_day_ticks.append({
+                "price": float(price),
+                "timestamp": tick_at.astimezone(timezone.utc).isoformat(),
+                "day_volume": cumulative,
+            })
+    return current_day_ticks, cumulative, None
+
+
 def _program_scan_symbols(now):
     """Return only US-listed candidates discovered from Schwab NASDAQ/NYSE movers.
 
@@ -556,24 +588,61 @@ def run_cycle():
                 program_skipped.append(diagnostic)
                 continue
 
-            # Feed only stored real quote timestamps to JeanLong. Minute candles seed indicators only.
-            day_start = datetime.combine(started.astimezone(eastern).date(), datetime.min.time(), tzinfo=eastern)
+            # Use prior regular-session close as volume baseline; feed today's ticks to candle logic.
+            local_now = quote_received_at.astimezone(eastern)
+            day_start = datetime.combine(local_now.date(), datetime.min.time(), tzinfo=eastern)
+            close_cutoff = (
+                datetime.combine(local_now.date(), dtime(16, 0), tzinfo=eastern)
+                if local_now.timetz().replace(tzinfo=None) >= dtime(16, 0) else day_start
+            )
             with _connect() as conn:
                 _init_tables(conn)
-                tick_rows = conn.execute("""
-                    SELECT tick_at,price,day_volume FROM tradeboot_market_ticks
+                baseline = conn.execute("""
+                    SELECT tick_at,day_volume FROM tradeboot_market_ticks
                     WHERE symbol=%s AND tick_at >= %s AND tick_at <= %s
-                    ORDER BY tick_at DESC LIMIT 5000
-                """, (symbol, day_start.astimezone(timezone.utc), quote_received_at + timedelta(seconds=10))).fetchall()
-            # SQL selects the newest 5,000 ticks; restore chronological order for engines.
-            tick_rows.reverse()
-            ticks = [{"price": float(row[1]), "timestamp": row[0].astimezone(timezone.utc).isoformat(),
-                      "day_volume": float(row[2]) if row[2] is not None else None}
-                     for row in tick_rows]
+                      AND (tick_at AT TIME ZONE 'America/New_York')::time
+                          BETWEEN TIME '15:30:00' AND TIME '16:00:00'
+                    ORDER BY tick_at DESC LIMIT 1
+                """, (symbol, started - timedelta(days=14), close_cutoff.astimezone(timezone.utc))).fetchone()
+                if baseline:
+                    baseline_at = baseline[0]
+                    volume_rows = conn.execute("""
+                        SELECT tick_at,price,day_volume FROM tradeboot_market_ticks
+                        WHERE symbol=%s AND tick_at >= %s AND tick_at <= %s
+                        ORDER BY tick_at ASC LIMIT 30000
+                    """, (symbol, baseline_at, quote_received_at + timedelta(seconds=10))).fetchall()
+                else:
+                    baseline_at = None
+                    volume_rows = conn.execute("""
+                        SELECT tick_at,price,day_volume FROM tradeboot_market_ticks
+                        WHERE symbol=%s AND tick_at >= %s AND tick_at <= %s
+                        ORDER BY tick_at DESC LIMIT 5000
+                    """, (symbol, day_start.astimezone(timezone.utc), quote_received_at + timedelta(seconds=10))).fetchall()
+                    volume_rows.reverse()
+
+            if baseline_at is not None and len(volume_rows) >= 30000:
+                ticks = [{"price": float(row[1]), "timestamp": row[0].astimezone(timezone.utc).isoformat(),
+                          "day_volume": None} for row in volume_rows if row[0] >= day_start.astimezone(timezone.utc)]
+                cumulative_volume = None
+                volume_window_error = "volume_window_history_truncated"
+            elif baseline_at is not None:
+                ticks, cumulative_volume, volume_window_error = _volume_window_ticks(
+                    volume_rows, baseline_at, day_start.astimezone(timezone.utc)
+                )
+            else:
+                ticks = [{"price": float(row[1]), "timestamp": row[0].astimezone(timezone.utc).isoformat(),
+                          "day_volume": None} for row in volume_rows]
+                cumulative_volume = None
+                volume_window_error = "previous_close_baseline_missing"
+
             if not ticks:
                 program_skipped.append({"symbol": symbol, "reason": "no_persisted_live_ticks"})
                 continue
-            cumulative_volume = next((tick["day_volume"] for tick in reversed(ticks) if tick["day_volume"] is not None), 0.0)
+            scanner_context_summaries.setdefault(symbol, {}).update({
+                "volume_window_start_utc": baseline_at.isoformat() if baseline_at else None,
+                "volume_since_previous_close": round(cumulative_volume, 2) if cumulative_volume is not None else None,
+                "volume_window_error": volume_window_error,
+            })
             daily_candles = [{k:v for k,v in row.items() if not k.startswith("_")} for row in daily_rows[-1000:]]
             if len(daily_candles) < 60:
                 program_skipped.append({"symbol": symbol, "reason": "insufficient_daily_history",
@@ -596,6 +665,7 @@ def run_cycle():
                 "prev_close": daily_candles[-1]["close"] if daily_candles else None,
                 "avg_volume_30d": (sum(daily_volumes) / len(daily_volumes)) if daily_volumes else None,
                 "volume_today": cumulative_volume,
+                "volume_window_start": baseline_at.isoformat() if baseline_at else None,
                 "float_shares": scanner_context.get("float_shares"),
                 "news": scanner_context.get("news", []),
             }
