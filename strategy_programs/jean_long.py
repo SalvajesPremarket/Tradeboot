@@ -29,21 +29,17 @@ REGLAS (largo; el corto es el espejo exacto)
     banda inferior + libelula (dragonfly) -> cierra.
 
 FILTROS DE SCANNER (se evaluan en el momento de la entrada; TODOS son obligatorios)
-    - Top gainer: ganancia pre-market >= 5% (ideal >= 10%); usa el dato pre-market explícito si el proveedor lo entrega, y si no, calcula contra el cierre anterior.
-    - RVol >= 5x: volumen de hoy / volumen promedio diario de 30 dias    [rvol_min]
-    - Precio entre $1 y $20                                              [price_min / price_max]
-    - Float < 20,000,000 acciones                                        [float_max]
-    - Noticia fresca obligatoria (earnings, FDA, contratos, fusiones, alianzas)  [news_*]
-    En el corto son los mismos filtros (acciones que ya subieron fuerte y estan agotandose).
+    - Precio entre $1 y $20                       [price_min / price_max]
+    - Float < 50,000,000 acciones                 [float_max]
+    - Volumen acumulado del dia < 500,000        [volume_max]
+    - Sin filtro de GAP, volumen relativo ni noticias.
+    En el corto se aplican los mismos limites de scanner.
     Se apagan todos juntos con CONFIG["use_scanner_filters"] = False.
 
 COMO LO USA EL TRADEBOOT
     bot   = MomentumTrader("ABCD")                      # un objeto por simbolo
-    bot.set_context({"prev_close": 3.10,                # cierre regular del dia anterior
-                     "avg_volume_30d": 850_000,         # volumen diario promedio 30 dias
-                     "float_shares": 12_500_000,
-                     "news": [{"published_at": datetime, "headline": "texto"}]})
-                    # RVol usa el promedio diario de 30 días: "avg_volume_30d".
+    bot.set_context({"float_shares": 12_500_000})
+                    # El volumen acumulado del dia llega en cada tick y debe ser < 500,000.
     bot.seed(velas_cerradas_1m)                         # opcional pero recomendado (200+ velas)
     acciones = bot.on_tick(precio, datetime_con_segundos, volumen_acumulado_del_dia)   # en CADA tick/segundo
     # volumen_acumulado_del_dia = volumen total de hoy hasta ahora (premarket incluido)
@@ -110,14 +106,9 @@ CONFIG: dict[str, Any] = {
 
     # filtros de scanner (los de tu Estrategia 1)
     "use_scanner_filters": True,
-    "gap_min_pct": 5.0,           # top gainer minimo (tu rango: 4-5%)
-    "gap_ideal_pct": 10.0,        # a partir de aqui se marca "gap_ideal" en las metricas
-    "rvol_min": 5.0,
     "price_min": 1.0, "price_max": 20.0,
-    "float_max": 20_000_000,
-    "news_required": True,
-    "news_max_age_hours": 16,     # "fresca": publicada en las ultimas N horas
-    "news_require_keyword": True,   # Solo acepta catalizadores reconocidos: earnings, FDA, contratos, fusiones o alianzas
+    "float_max": 50_000_000,
+    "volume_max": 500_000,         # volumen acumulado estricto: debe ser menor de 500 mil
 }
 
 CATALYSTS: dict[str, tuple[str, ...]] = {
@@ -433,72 +424,32 @@ class MomentumTrader:
         if not (cfg["price_min"] <= price <= cfg["price_max"]):
             r.append(f"precio fuera de ${cfg['price_min']}-${cfg['price_max']}")
 
-        # Prefer the provider's explicit pre-market change; fallback to price vs previous close.
-        premarket_gain = ctx.get("premarket_change_pct")
-        if premarket_gain is not None:
-            try:
-                premarket_gain = float(premarket_gain)
-            except (TypeError, ValueError):
-                premarket_gain = None
-        if premarket_gain is None:
-            pc = ctx.get("prev_close")
-            if not pc or pc <= 0:
-                r.append("sin cierre anterior (prev_close)")
-            else:
-                premarket_gain = (price - pc) / pc * 100
-        if premarket_gain is not None:
-            m["premarket_gain_pct"] = round(premarket_gain, 2)
-            m["gap_pct"] = round(premarket_gain, 2)  # backward-compatible metric name
-            m["gain_ideal"] = premarket_gain >= cfg["gap_ideal_pct"]
-            m["gap_ideal"] = m["gain_ideal"]
-            if premarket_gain < cfg["gap_min_pct"]:
-                r.append(f"ganancia pre-market {premarket_gain:.1f}% < {cfg['gap_min_pct']}%")
-
-        base = ctx.get("avg_volume_30d") or ctx.get("avg_premarket_volume_30d")
-        vol = self.day_volume if self.day_volume is not None else ctx.get("volume_today")
-        if not base or base <= 0 or vol is None:
-            r.append("sin volumen promedio 30d o volumen de hoy")
-        else:
-            rvol = vol / base
-            m["rvol"] = round(rvol, 2)
-            if rvol < cfg["rvol_min"]:
-                r.append(f"RVol {rvol:.1f}x < {cfg['rvol_min']}x")
-
+        # Float menor al limite configurado; no se exige GAP ni catalizador.
         fl = ctx.get("float_shares")
-        if not fl or fl <= 0:
+        if fl is None or fl <= 0:
             r.append("float desconocido")
         else:
             m["float"] = int(fl)
             if fl >= cfg["float_max"]:
                 r.append(f"float >= {cfg['float_max']:,}")
 
-        if cfg["news_required"]:
-            news = self._fresh_news(ts)
-            if news is None:
-                r.append("sin noticia fresca")
+        # Se usa el volumen acumulado recibido con el tick (premarket incluido).
+        # Si falta el dato no podemos verificar el limite de volumen.
+        vol = self.day_volume if self.day_volume is not None else ctx.get("volume_today")
+        if vol is None:
+            r.append(f"sin volumen de hoy para verificar < {cfg['volume_max']:,}")
+        else:
+            try:
+                vol = float(vol)
+            except (TypeError, ValueError):
+                vol = None
+            if vol is None or vol < 0:
+                r.append("volumen de hoy invalido")
             else:
-                m["noticia"] = news
+                m["volume_today"] = int(vol)
+                if vol >= cfg["volume_max"]:
+                    r.append(f"volumen {vol:,.0f} >= {cfg['volume_max']:,}")
         return r
-
-    def _fresh_news(self, now: datetime) -> dict | None:
-        cfg, best = self.cfg, None
-        for n in self.ctx.get("news") or []:
-            pub = n["published_at"]
-            if pub.tzinfo is None and now.tzinfo is not None:
-                pub = pub.replace(tzinfo=now.tzinfo)
-            elif pub.tzinfo is not None and now.tzinfo is None:
-                now = now.replace(tzinfo=pub.tzinfo)
-            age_h = (now - pub).total_seconds() / 3600
-            # Reject future-dated headlines instead of treating negative age as fresh news.
-            if age_h < 0 or age_h > cfg["news_max_age_hours"]:
-                continue
-            head = n.get("headline", "")
-            cat = next((k for k, words in CATALYSTS.items() if any(w in head.lower() for w in words)), None)
-            if cfg["news_require_keyword"] and cat is None:
-                continue
-            if best is None or age_h < best[0]:
-                best = (age_h, cat or "otro", head[:120])
-        return None if best is None else {"categoria": best[1], "titular": best[2], "edad_horas": round(best[0], 1)}
 
     # ---------------- utilidades ----------------
     def _act(self, kind: str, price: float, **kw) -> dict:
