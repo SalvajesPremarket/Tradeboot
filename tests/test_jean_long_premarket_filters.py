@@ -1,10 +1,33 @@
 from datetime import datetime
+import inspect
 import unittest
 
-from strategy_programs.jean_long import MomentumTrader
+from strategy_programs import jean_long
+from strategy_programs.jean_long import CONFIG, MomentumTrader
+from strategy_store import _canonical_program_source
 
 
 class JeanLongPremarketFilterTests(unittest.TestCase):
+    def test_jean_long_source_contains_no_short_strategy_text(self):
+        source = inspect.getsource(jean_long)
+        self.assertNotIn("SHORT", source.upper())
+        self.assertNotIn("JEANSHORT", source.upper())
+
+    def test_canonical_ui_source_is_the_checked_in_jean_long_module(self):
+        source = _canonical_program_source("JeanLong", "python_program")
+        self.assertEqual(source, inspect.getsource(jean_long))
+        self.assertIsNone(_canonical_program_source("JeanLong", "formula"))
+        self.assertIsNone(_canonical_program_source("JeanShort", "python_program"))
+
+    def test_jean_long_scanner_thresholds_are_the_approved_values(self):
+        self.assertEqual(CONFIG["price_min"], 1.0)
+        self.assertEqual(CONFIG["price_max"], 20.0)
+        self.assertEqual(CONFIG["float_max"], 50_000_000)
+        self.assertEqual(CONFIG["volume_max"], 1_000_000)
+        self.assertNotIn("gap_min_pct", CONFIG)
+        self.assertNotIn("rvol_min", CONFIG)
+        self.assertNotIn("news_required", CONFIG)
+
     def make_bot(self, float_shares=25_000_000, volume=999_999):
         bot = MomentumTrader("TEST", "LONG")
         bot.set_context({"float_shares": float_shares})
