@@ -1,66 +1,32 @@
 """
-TRADEBOOT - MOMENTUM POR TRAMOS (velas de 1 minuto)  --  version LARGO
-=======================================================================
-El mismo archivo sirve para largo y corto: solo cambia SIDE ("LONG" / "SHORT").
-tradeboot_largo.py = SIDE "LONG"   |   tradeboot_corto.py = SIDE "SHORT"
+TRADEBOOT — JEAN LONG
+Motor de momentum LONG con velas de un minuto.
 
-REGLAS (largo; el corto es el espejo exacto)
-  ENTRADA  (al volver a la apertura en los primeros 20 s de la vela)
-    - la vela nace por encima de la EMA20 (como mucho 1 vela previa ya por encima)
-    - MACD positivo
-    - sin EMA50 / EMA200 por encima en el camino (a menos de CONFIG["clearance_pct"] %)
-    - tramo 1 (seg 0-20): abre, baja, regresa a su apertura (libelula) -> ENTRA
-      si primero sube, regresa a la apertura y se va negativa -> NO entra / cierra
-  VELA 1 (la de entrada)
-    - tramo 2 (21-40) y tramo 3 (41-60) positivas -> sigue abierta
-    - regresa a la apertura en tramo 3 -> cierra de inmediato
-  VELA 2
-    - abre positiva y su minimo > minimo de la vela 1 -> sigue abierta
-    - tras 20 s positiva -> stop al cierre de la vela 1
-    - regresa a su apertura -> cierra
-    - si no cumple -> espera a la vela 3 (sin mover el stop)
-  VELA 3 EN ADELANTE
-    - positiva con minimo superior -> sigue abierta y stop al cierre de la vela anterior
-    - tocar Bandas de Bollinger y seguir positiva -> sigue abierta
-  SALIDA
-    - vela que toca la banda de Bollinger y forma lapida (gravestone) -> cierra
-  CORTO = todo invertido: nace bajo la EMA20, MACD negativo, sin EMA50/200 debajo,
-    entrada si sube y regresa a la apertura, maximo inferior, stop baja,
-    banda inferior + libelula (dragonfly) -> cierra.
+ENTRADA
+- La vela nace por encima de EMA20 y el precio se mantiene del lado LONG.
+- MACD positivo.
+- EMA50 y EMA200 no deben estar inmediatamente por encima del precio dentro
+  del margen configurado.
+- Durante los primeros 20 segundos, el precio retrocede bajo la apertura y
+  recupera la apertura formando el patrón de entrada LONG.
 
-FILTROS DE SCANNER (se evaluan en el momento de la entrada; TODOS son obligatorios)
-    - Precio entre $1 y $20                       [price_min / price_max]
-    - Float < 50,000,000 acciones                 [float_max]
-    - Volumen acumulado desde el cierre regular anterior < 1,000,000        [volume_max]
-    - Sin filtro de GAP, volumen relativo ni noticias.
-    En el corto se aplican los mismos limites de scanner.
-    Se apagan todos juntos con CONFIG["use_scanner_filters"] = False.
+GESTIÓN
+- La primera vela debe conservar el avance; si pierde la apertura en los
+  tramos configurados, se cierra según las reglas del motor.
+- Las velas siguientes deben mejorar el mínimo anterior para continuar.
+- El stop solo se mueve a favor.
+- La salida por reversión se evalúa con la banda superior de Bollinger.
 
-COMO LO USA EL TRADEBOOT
-    bot   = MomentumTrader("ABCD")                      # un objeto por simbolo
-    bot.set_context({"float_shares": 12_500_000})
-                    # El volumen acumulado desde el cierre regular anterior llega en cada tick y debe ser < 1,000,000.
-    bot.seed(velas_cerradas_1m)                         # opcional pero recomendado (200+ velas)
-    acciones = bot.on_tick(precio, datetime_con_segundos, volumen_acumulado_del_dia)   # en CADA tick/segundo
-    # volumen_acumulado_del_dia = volumen desde el cierre regular anterior hasta ahora
+FILTROS OBLIGATORIOS DEL SCANNER
+- Precio entre $1 y $20, ambos incluidos.
+- Float estrictamente menor de 50,000,000 acciones.
+- Volumen acumulado desde el cierre regular de la sesión anterior
+  estrictamente menor de 1,000,000 acciones.
+- Si no se puede verificar float o volumen, no se permite la entrada.
+- No se exige GAP, volumen relativo (RVol) ni noticias.
 
-    Cada accion es un dict:
-      {"action": "ENTER" | "EXIT" | "MOVE_STOP", "symbol", "side": "LONG"|"SHORT",
-       "order": "BUY"|"SELL"|None, "price", "stop", "reason"}
-    ENTER     -> abrir a mercado (la cantidad de acciones la define tu interfaz) y poner stop en `stop`
-    MOVE_STOP -> mover el stop existente a `stop` (solo se mueve a favor, nunca atras)
-    EXIT      -> cerrar toda la posicion a mercado
-
-    El tamano de posicion (dinero, % diario, cantidad de acciones) NO esta aqui: lo maneja la interfaz.
-    Si la interfaz no puede ejecutar un ENTER (sin fondos, limite diario...), llamar bot.cancel_entry()
-    para que el motor no crea que hay una posicion abierta.
-
-LO QUE NO ESTABA EN TUS REGLAS (lo defini yo, todo editable en CONFIG)
-    - stop inicial: extremo de la vela de entrada (la mecha de la libelula) + colchon,
-      con tope maximo de perdida `hard_stop_pct`
-    - tramo 2 de la vela 1: si pierde la apertura tambien cierra (t2_close_if_back_to_open)
-    - tolerancias de "regresa a la apertura" y tamano minimo de la mecha de entrada
-    - forma exacta de la lapida (cuerpo pequeno, mecha larga hacia la banda)
+El volumen recibido por el motor corresponde a la suma desde el cierre
+regular anterior, incluyendo horario extendido y premarket.
 """
 
 from __future__ import annotations
@@ -70,7 +36,7 @@ from collections import deque
 from datetime import datetime, time as dtime
 from typing import Any
 
-SIDE = "LONG"   # "LONG" o "SHORT"
+SIDE = "LONG"
 STRATEGY_NAME = "Momentum Tramos"
 
 # ----------------------------------------------------------------------------
@@ -382,7 +348,7 @@ class MomentumTrader:
         return m + self.cfg["bb_std"] * sd, m - self.cfg["bb_std"] * sd
 
     def _is_reversal_candle(self, c: dict, close_price: float) -> bool:
-        """Largo: lapida en banda superior. Corto: libelula en banda inferior."""
+        """JeanLong cierra cuando aparece una vela de reversión en la banda superior."""
         bands = self._bands(close_price)
         rng = c["high"] - c["low"]
         if bands is None or rng <= 0:
