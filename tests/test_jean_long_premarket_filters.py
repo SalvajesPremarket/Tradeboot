@@ -78,3 +78,25 @@ class JeanLongPremarketFilterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_waiting_pattern_keeps_scanner_blockers_visible(self):
+        bot = MomentumTrader("TEST", "LONG")
+        bot.set_context({})
+        bot.c = {
+            "open": 5.0,
+            "first_move": None,
+            "adv_dip": 0.0,
+            "entered_here": False,
+            "pattern_inverted": False,
+        }
+
+        actions = bot._try_enter(
+            5.0, 25, datetime(2026, 10, 23, 8, 0), 0.0
+        )
+
+        self.assertEqual(actions, [])
+        self.assertIn("fuera del tramo de entrada (0-20 s)", bot.last_wait_reason)
+        self.assertTrue(any("sin cierre anterior" in reason for reason in bot.last_reject))
+        self.assertTrue(any("sin volumen promedio" in reason for reason in bot.last_reject))
+        self.assertTrue(any("float desconocido" in reason for reason in bot.last_reject))
+        self.assertTrue(any("sin noticia fresca" in reason for reason in bot.last_reject))
