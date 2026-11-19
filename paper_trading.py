@@ -638,11 +638,6 @@ def run_cycle():
             if not ticks:
                 program_skipped.append({"symbol": symbol, "reason": "no_persisted_live_ticks"})
                 continue
-            scanner_context_summaries.setdefault(symbol, {}).update({
-                "volume_window_start_utc": baseline_at.isoformat() if baseline_at else None,
-                "volume_since_previous_close": round(cumulative_volume, 2) if cumulative_volume is not None else None,
-                "volume_window_error": volume_window_error,
-            })
             daily_candles = [{k:v for k,v in row.items() if not k.startswith("_")} for row in daily_rows[-1000:]]
             if len(daily_candles) < 60:
                 program_skipped.append({"symbol": symbol, "reason": "insufficient_daily_history",
@@ -660,6 +655,9 @@ def run_cycle():
                 "news_provider": context_diag.get("news_provider"),
                 "news_count": context_diag.get("news_count", 0),
                 "news_latest_at": context_diag.get("news_latest_at"),
+                "volume_window_start_utc": baseline_at.isoformat() if baseline_at else None,
+                "volume_since_previous_close": round(cumulative_volume, 2) if cumulative_volume is not None else None,
+                "volume_window_error": volume_window_error,
             }
             context = {
                 "prev_close": daily_candles[-1]["close"] if daily_candles else None,
