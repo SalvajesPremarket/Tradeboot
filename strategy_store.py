@@ -23,6 +23,16 @@ def _connect():
         raise StrategyStoreUnavailable("strategy_database_unavailable") from None
 
 
+def _canonical_program_source(name, strategy_type):
+    """Return the checked-in source for canonical reviewed programs shown in the UI."""
+    normalized_name = "".join(str(name or "").casefold().split())
+    if normalized_name == "jeanlong" and strategy_type == "python_program":
+        import inspect
+        from strategy_programs import jean_long
+        return inspect.getsource(jean_long)
+    return None
+
+
 def list_strategies():
     with _connect() as conn:
         conn.execute("""
@@ -38,6 +48,20 @@ def list_strategies():
         """)
         conn.execute("ALTER TABLE tradeboot_strategies DROP COLUMN IF EXISTS allocation_percent")
         conn.execute("ALTER TABLE tradeboot_strategies ADD COLUMN IF NOT EXISTS strategy_type TEXT NOT NULL DEFAULT 'formula'")
+        # JeanLong is a canonical reviewed program. Replace stale saved snapshots
+        # before returning strategies so the editor always displays the exact
+        # LONG-only source that the simulation engine executes.
+        canonical_jean_long = _canonical_program_source("JeanLong", "python_program")
+        if canonical_jean_long is not None:
+            conn.execute(
+                """UPDATE tradeboot_strategies
+                   SET formula = %s, updated_at = %s
+                   WHERE lower(replace(trim(name), ' ', '')) = %s
+                     AND strategy_type = %s
+                     AND formula IS DISTINCT FROM %s""",
+                (canonical_jean_long, datetime.now(timezone.utc), "jeanlong",
+                 "python_program", canonical_jean_long),
+            )
         rows = conn.execute(
             "SELECT id, name, formula, enabled, created_at, strategy_type FROM tradeboot_strategies ORDER BY created_at, id"
         ).fetchall()
