@@ -135,5 +135,49 @@ class TwelveDataIntegrationTests(unittest.TestCase):
         self.assertEqual(payload["candles"][0]["volume"], "1000")
 
 
+    def test_yahoo_cookie_and_crumb_session_is_reused_between_symbols(self):
+        class Response:
+            def __init__(self, body):
+                self.body = body
+            def read(self):
+                return self.body
+            def close(self):
+                pass
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+
+        class Opener:
+            def __init__(self):
+                self.calls = []
+            def open(self, request, timeout=None):
+                self.calls.append(request.full_url)
+                if "getcrumb" in request.full_url:
+                    return Response(b"shared-crumb")
+                if "quoteSummary" in request.full_url:
+                    return Response(b'{"quoteSummary":{"result":[{"defaultKeyStatistics":{"floatShares":{"raw":1234567}}}]}}')
+                return Response(b"")
+
+        opener = Opener()
+        td._YAHOO_OPENER = None
+        td._YAHOO_CRUMB = None
+        td._YAHOO_CRUMB_EXPIRES = 0.0
+        td._YAHOO_COOLDOWN_UNTIL = 0.0
+        with patch("urllib.request.build_opener", return_value=opener):
+            self.assertEqual(td._get_yahoo_float("AAA"), (1234567, None))
+            self.assertEqual(td._get_yahoo_float("BBB"), (1234567, None))
+        self.assertEqual(sum("getcrumb" in url for url in opener.calls), 1)
+        self.assertEqual(sum("fc.yahoo.com" in url for url in opener.calls), 1)
+        self.assertEqual(sum("quoteSummary" in url for url in opener.calls), 2)
+
+    def test_yahoo_rate_limit_enters_shared_cooldown_without_new_requests(self):
+        td._YAHOO_COOLDOWN_UNTIL = td.time.monotonic() + 600
+        with patch("urllib.request.build_opener", side_effect=AssertionError("must respect cooldown")):
+            self.assertEqual(td._get_yahoo_float("AAA"), (None, "yahoo_rate_limited_cooldown"))
+            self.assertEqual(td._get_yahoo_float("BBB"), (None, "yahoo_rate_limited_cooldown"))
+        td._YAHOO_COOLDOWN_UNTIL = 0.0
+
+
 if __name__ == "__main__":
     unittest.main()
