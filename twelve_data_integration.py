@@ -37,6 +37,14 @@ _COUNTRY_CURSOR = 0
 _LAST_STATS_REQUEST = 0.0
 # Last successful US discovery list; symbol discovery only, never a substitute for fresh quotes.
 _LAST_GOOD_US_CANDIDATES = (0.0, [])
+# Yahoo's cookie/crumb pair is session-bound. Reuse one process-wide session instead
+# of opening three new connections for every symbol (which quickly triggers HTTP 429).
+_YAHOO_SESSION_LOCK = threading.RLock()
+_YAHOO_OPENER = None
+_YAHOO_CRUMB = None
+_YAHOO_CRUMB_EXPIRES = 0.0
+_YAHOO_COOLDOWN_UNTIL = 0.0
+_YAHOO_429_COOLDOWN_SECONDS = 900
 
 
 def _request_json(endpoint, params=None, cache_key=None, ttl_seconds=60):
@@ -616,35 +624,59 @@ def _provider_json(url, api_key, provider):
         return 502, None
 
 
-def _get_yahoo_float(symbol):
-    """Read Yahoo Finance's public floatShares statistic without a paid data plan.
+def _yahoo_headers():
+    return {
+        "Accept": "application/json, text/plain, */*",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    }
 
-    Yahoo does not publish a stable official API; failures are non-fatal and never
-    replaced with shares outstanding. JeanLong remains blocked when no explicit
-    floatShares value is returned.
-    """
-    symbol = str(symbol or "").strip().upper()
-    try:
-        from http.cookiejar import CookieJar
-        from urllib.request import HTTPCookieProcessor, build_opener
+
+def _get_yahoo_session():
+    """Return a shared Yahoo cookie/crumb session, refreshing it at most every six hours."""
+    global _YAHOO_OPENER, _YAHOO_CRUMB, _YAHOO_CRUMB_EXPIRES
+    from http.cookiejar import CookieJar
+    from urllib.request import HTTPCookieProcessor, build_opener
+
+    with _YAHOO_SESSION_LOCK:
+        now = time.monotonic()
+        if _YAHOO_OPENER is not None and _YAHOO_CRUMB and _YAHOO_CRUMB_EXPIRES > now:
+            return _YAHOO_OPENER, _YAHOO_CRUMB
         opener = build_opener(HTTPCookieProcessor(CookieJar()))
-        headers = {
-            "Accept": "application/json, text/plain, */*",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        }
-        # Yahoo issues a crumb bound to its cookie. The initial consent endpoint may
-        # return 404 while still setting the required cookie.
+        headers = _yahoo_headers()
+        # Yahoo's consent endpoint may return 404 while still setting the session cookie.
         try:
             opener.open(Request("https://fc.yahoo.com", headers=headers), timeout=TIMEOUT_SECONDS).close()
-        except HTTPError:
-            pass
+        except HTTPError as exc:
+            if exc.code not in (401, 403, 404):
+                raise
         with opener.open(Request("https://query1.finance.yahoo.com/v1/test/getcrumb", headers=headers), timeout=TIMEOUT_SECONDS) as response:
             crumb = response.read().decode("utf-8").strip()
         if not crumb or len(crumb) > 256 or "\n" in crumb:
-            return None, "yahoo_crumb_unavailable"
+            raise ValueError("yahoo_crumb_unavailable")
+        _YAHOO_OPENER = opener
+        _YAHOO_CRUMB = crumb
+        _YAHOO_CRUMB_EXPIRES = now + 21600
+        return opener, crumb
+
+
+def _get_yahoo_float(symbol):
+    """Read explicit Yahoo floatShares using a shared cookie/crumb session.
+
+    The session is reused across symbols to reduce Yahoo requests. HTTP 429 triggers
+    a process-wide cooldown; the value is never estimated or replaced by shares
+    outstanding, so JeanLong remains fail-closed when float cannot be verified.
+    """
+    global _YAHOO_COOLDOWN_UNTIL, _YAHOO_OPENER, _YAHOO_CRUMB, _YAHOO_CRUMB_EXPIRES
+    symbol = str(symbol or "").strip().upper()
+    with _YAHOO_SESSION_LOCK:
+        now = time.monotonic()
+        if now < _YAHOO_COOLDOWN_UNTIL:
+            return None, "yahoo_rate_limited_cooldown"
+    try:
+        opener, crumb = _get_yahoo_session()
         query = urlencode({"modules": "defaultKeyStatistics", "crumb": crumb})
         url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?{query}"
-        with opener.open(Request(url, headers=headers), timeout=TIMEOUT_SECONDS) as response:
+        with opener.open(Request(url, headers=_yahoo_headers()), timeout=TIMEOUT_SECONDS) as response:
             payload = json.loads(response.read().decode("utf-8"))
         summary = payload.get("quoteSummary") if isinstance(payload, dict) else None
         results = summary.get("result") if isinstance(summary, dict) else None
@@ -657,6 +689,17 @@ def _get_yahoo_float(symbol):
             return shares, None
         return None, "yahoo_float_unavailable"
     except HTTPError as exc:
+        if exc.code == 429:
+            with _YAHOO_SESSION_LOCK:
+                _YAHOO_COOLDOWN_UNTIL = time.monotonic() + _YAHOO_429_COOLDOWN_SECONDS
+                _YAHOO_OPENER = None
+                _YAHOO_CRUMB = None
+                _YAHOO_CRUMB_EXPIRES = 0.0
+            with _CACHE_LOCK:
+                _DIAGNOSTICS["yahoo_float"] = {
+                    "status": "rate_limited", "http_status": 429,
+                    "cooldown_seconds": _YAHOO_429_COOLDOWN_SECONDS,
+                }
         return None, "yahoo_http_" + str(exc.code)
     except (URLError, TimeoutError, OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError, OverflowError):
         return None, "yahoo_float_unavailable"
