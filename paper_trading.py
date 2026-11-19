@@ -775,6 +775,9 @@ def run_cycle():
             reason: sum(1 for item in program_skipped if item.get("reason") == reason)
             for reason in sorted({item.get("reason", "unknown") for item in program_skipped})
         },
+        # Expose the actual per-symbol pattern wait state and scanner blockers.
+        # These fields are observational only and never authorize an entry.
+        "program_evaluations": program_evaluations[:12],
     }
     scan_log["event"] = "paper_cycle_completed"
     scan_log["evaluations_total"] = evaluated
