@@ -41,7 +41,7 @@ COMO LO USA EL TRADEBOOT
     bot.set_context({"float_shares": 12_500_000})
                     # El volumen acumulado desde el cierre regular anterior llega en cada tick y debe ser < 1,000,000.
     bot.seed(velas_cerradas_1m)                         # opcional pero recomendado (200+ velas)
-    acciones = bot.on_tick(precio, datetime_con_segundos, volumen_acumulado_del_dia)   # en CADA tick/segundo
+    acciones = bot.on_tick(precio, datetime_con_segundos, volumen_desde_cierre_anterior)   # en CADA tick/segundo
     # volumen_acumulado_del_dia = volumen desde el cierre regular anterior hasta ahora
 
     Cada accion es un dict:
