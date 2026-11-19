@@ -45,6 +45,13 @@ _YAHOO_CRUMB = None
 _YAHOO_CRUMB_EXPIRES = 0.0
 _YAHOO_COOLDOWN_UNTIL = 0.0
 _YAHOO_429_COOLDOWN_SECONDS = 900
+# Massive Basic Free allows only a small number of requests per minute. Batch
+# candidate tickers once per scan cycle and remember misses to avoid per-symbol calls.
+_MASSIVE_BATCH_LOCK = threading.RLock()
+_MASSIVE_BATCH_CHECKED = {}
+_MASSIVE_BATCH_LAST_REQUEST = 0.0
+_MASSIVE_BATCH_MIN_INTERVAL = 12.0
+_MASSIVE_BATCH_MISS_TTL = 1800
 
 
 def _request_json(endpoint, params=None, cache_key=None, ttl_seconds=60):
@@ -707,6 +714,112 @@ def _get_yahoo_float(symbol):
         return None, "yahoo_" + type(exc).__name__
 
 
+
+def prefetch_free_floats(symbols):
+    """Fetch Massive float for a candidate batch, respecting its free request limit.
+
+    Valid results enter the normal six-hour float cache. Missing/invalid results are
+    marked for 30 minutes so _get_free_float falls back to Yahoo without issuing one
+    Massive request per ticker. No shares-outstanding fields are ever considered.
+    """
+    global _MASSIVE_BATCH_LAST_REQUEST
+    massive_key = (
+        os.environ.get("MASSIVE_API_KEY")
+        or os.environ.get("POLYGON_API_KEY")
+        or ""
+    ).strip()
+    if not massive_key:
+        return {"status": "missing_api_key", "requested": 0, "valid": 0}
+
+    requested = list(dict.fromkeys(
+        str(symbol or "").strip().upper()
+        for symbol in (symbols or [])
+        if _valid_symbol(str(symbol or "").strip().upper())
+    ))
+    if not requested:
+        return {"status": "empty", "requested": 0, "valid": 0}
+
+    monotonic_now = time.monotonic()
+    with _MASSIVE_BATCH_LOCK:
+        with _CACHE_LOCK:
+            pending = []
+            for symbol in requested:
+                cached = _CACHE.get("free_float:" + symbol)
+                checked = _MASSIVE_BATCH_CHECKED.get(symbol)
+                if cached and cached[0] > monotonic_now:
+                    continue
+                if checked and checked[0] > monotonic_now:
+                    continue
+                pending.append(symbol)
+        if not pending:
+            return {"status": "cached", "requested": len(requested), "valid": 0}
+        wait_remaining = _MASSIVE_BATCH_MIN_INTERVAL - (monotonic_now - _MASSIVE_BATCH_LAST_REQUEST)
+        if wait_remaining > 0:
+            with _CACHE_LOCK:
+                for symbol in pending:
+                    _MASSIVE_BATCH_CHECKED[symbol] = (
+                        monotonic_now + min(60, max(15, int(wait_remaining) + 5)),
+                        "massive_batch_rate_limited",
+                    )
+            return {"status": "throttled", "requested": len(pending), "valid": 0}
+
+        _MASSIVE_BATCH_LAST_REQUEST = monotonic_now
+        url = "https://api.massive.com/stocks/vX/float?" + urlencode({
+            "ticker.any_of": ",".join(pending),
+            "apiKey": massive_key,
+        })
+        status, payload = _provider_json(url, massive_key, "massive")
+        rows = payload.get("results") if isinstance(payload, dict) else None
+        by_symbol = {}
+        if status == 200 and isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                ticker = str(row.get("ticker") or "").strip().upper()
+                if ticker in pending:
+                    by_symbol[ticker] = row
+
+        valid = 0
+        with _CACHE_LOCK:
+            for symbol in pending:
+                row = by_symbol.get(symbol, {})
+                try:
+                    shares = int(float(row.get("free_float")))
+                except (TypeError, ValueError, OverflowError):
+                    shares = 0
+                effective = _parse_timestamp(row.get("effective_date")) if row.get("effective_date") else None
+                age_days = (
+                    (datetime.now(timezone.utc).date() - effective.date()).days
+                    if effective else None
+                )
+                if status == 200 and shares > 0 and age_days is not None and -1 <= age_days <= 365:
+                    result = {
+                        "float_shares": shares, "provider": "massive",
+                        "effective_date": effective.date().isoformat(), "status": "ok",
+                    }
+                    _CACHE["free_float:" + symbol] = (monotonic_now + 21600, result)
+                    _MASSIVE_BATCH_CHECKED.pop(symbol, None)
+                    valid += 1
+                else:
+                    attempt = (
+                        "massive_no_valid_float" if status == 200
+                        else "massive_http_" + str(status)
+                    )
+                    _MASSIVE_BATCH_CHECKED[symbol] = (
+                        monotonic_now + _MASSIVE_BATCH_MISS_TTL, attempt
+                    )
+            _DIAGNOSTICS["massive_float_batch"] = {
+                "status": "ok" if status == 200 else "http_error",
+                "http_status": status,
+                "requested": len(pending),
+                "valid": valid,
+            }
+        return {
+            "status": "ok" if status == 200 else "http_error",
+            "requested": len(pending), "valid": valid,
+        }
+
+
 def _get_free_float(symbol, now=None):
     """Resolve actual float shares from free/read-only sources; never estimate."""
     symbol = str(symbol or "").strip().upper()
@@ -724,28 +837,35 @@ def _get_free_float(symbol, now=None):
     ).strip()
     attempts = []
     if massive_key:
-        url = "https://api.massive.com/stocks/vX/float?" + urlencode({
-            "ticker": symbol, "apiKey": massive_key,
-        })
-        status, payload = _provider_json(url, massive_key, "massive")
-        results = payload.get("results") if isinstance(payload, dict) else None
-        row = results[0] if isinstance(results, list) and results and isinstance(results[0], dict) else {}
-        try:
-            shares = int(float(row.get("free_float")))
-        except (TypeError, ValueError, OverflowError):
-            shares = 0
-        effective = _parse_timestamp(row.get("effective_date")) if row.get("effective_date") else None
-        age_days = (datetime.now(timezone.utc).date() - effective.date()).days if effective else None
-        if status == 200 and shares > 0 and age_days is not None and -1 <= age_days <= 365:
-            result = {
-                "float_shares": shares, "provider": "massive",
-                "effective_date": effective.date().isoformat(), "status": "ok",
-            }
-            with _CACHE_LOCK:
-                _CACHE[cache_key] = (current + 21600, result)
-                _DIAGNOSTICS["float"] = {"status": "ok", "provider": "massive", "effective_date": result["effective_date"]}
-            return result
-        attempts.append("massive_no_valid_float" if status == 200 else "massive_http_" + str(status))
+        with _CACHE_LOCK:
+            batch_checked = _MASSIVE_BATCH_CHECKED.get(symbol)
+            batch_was_checked = bool(batch_checked and batch_checked[0] > current)
+            batch_attempt = batch_checked[1] if batch_was_checked else None
+        if batch_was_checked:
+            attempts.append(batch_attempt)
+        else:
+            url = "https://api.massive.com/stocks/vX/float?" + urlencode({
+                "ticker": symbol, "apiKey": massive_key,
+            })
+            status, payload = _provider_json(url, massive_key, "massive")
+            results = payload.get("results") if isinstance(payload, dict) else None
+            row = results[0] if isinstance(results, list) and results and isinstance(results[0], dict) else {}
+            try:
+                shares = int(float(row.get("free_float")))
+            except (TypeError, ValueError, OverflowError):
+                shares = 0
+            effective = _parse_timestamp(row.get("effective_date")) if row.get("effective_date") else None
+            age_days = (datetime.now(timezone.utc).date() - effective.date()).days if effective else None
+            if status == 200 and shares > 0 and age_days is not None and -1 <= age_days <= 365:
+                result = {
+                    "float_shares": shares, "provider": "massive",
+                    "effective_date": effective.date().isoformat(), "status": "ok",
+                }
+                with _CACHE_LOCK:
+                    _CACHE[cache_key] = (current + 21600, result)
+                    _DIAGNOSTICS["float"] = {"status": "ok", "provider": "massive", "effective_date": result["effective_date"]}
+                return result
+            attempts.append("massive_no_valid_float" if status == 200 else "massive_http_" + str(status))
 
     shares, yahoo_error = _get_yahoo_float(symbol)
     if shares:
