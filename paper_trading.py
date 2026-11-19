@@ -47,6 +47,70 @@ _PROGRAM_SYMBOLS = tuple(dict.fromkeys(
 ))
 
 
+def _quote_timestamp_audit(quote, received_at, max_age_seconds=_TICK_MAX_AGE_SECONDS):
+    """Describe every provider timestamp without changing quote acceptance behavior."""
+    fields = []
+    for field in ("quoteTimeInLong", "tradeTimeInLong", "tradeTime", "quoteTime"):
+        raw_value = quote.get(field) if isinstance(quote, dict) else None
+        if raw_value is None or raw_value == "":
+            continue
+        item = {"field": field}
+        item["raw_value"] = raw_value if isinstance(raw_value, (str, int, float, bool)) else type(raw_value).__name__
+        try:
+            if isinstance(raw_value, bool):
+                raise ValueError("boolean_timestamp")
+            if isinstance(raw_value, str) and not raw_value.strip().isdigit():
+                parsed_at = datetime.fromisoformat(raw_value.strip().replace("Z", "+00:00"))
+                if parsed_at.tzinfo is None:
+                    parsed_at = parsed_at.replace(tzinfo=timezone.utc)
+            else:
+                numeric = float(raw_value)
+                if not __import__("math").isfinite(numeric) or numeric <= 0:
+                    raise ValueError("invalid_timestamp")
+                parsed_at = datetime.fromtimestamp(
+                    numeric / (1000 if numeric > 10_000_000_000 else 1), timezone.utc
+                )
+            parsed_at = parsed_at.astimezone(timezone.utc)
+            age = (received_at - parsed_at).total_seconds()
+            item["normalized_utc"] = parsed_at.isoformat()
+            item["age_seconds"] = round(age, 3)
+            item["accepted"] = -10 <= age <= max_age_seconds
+            item["reason"] = None if item["accepted"] else (
+                "future_timestamp" if age < -10 else "stale_timestamp"
+            )
+        except (TypeError, ValueError, OverflowError, OSError):
+            item["normalized_utc"] = None
+            item["age_seconds"] = None
+            item["accepted"] = False
+            item["reason"] = "invalid_timestamp"
+        fields.append(item)
+
+    accepted = [item for item in fields if item["accepted"]]
+    selected = max(accepted, key=lambda item: item["normalized_utc"]) if accepted else None
+    if selected:
+        reason = None
+    elif not fields:
+        reason = "timestamp_missing"
+    elif any(item["normalized_utc"] for item in fields):
+        newest = max(
+            (item for item in fields if item["normalized_utc"]),
+            key=lambda item: item["normalized_utc"],
+        )
+        reason = newest["reason"] or "timestamp_outside_freshness_window"
+    else:
+        reason = "timestamp_invalid"
+    return {
+        "received_at_utc": received_at.astimezone(timezone.utc).isoformat(),
+        "max_age_seconds": max_age_seconds,
+        "accepted": bool(selected),
+        "selected_field": selected["field"] if selected else None,
+        "selected_timestamp_utc": selected["normalized_utc"] if selected else None,
+        "selected_age_seconds": selected["age_seconds"] if selected else None,
+        "reason": reason,
+        "fields": fields,
+    }
+
+
 def _program_scan_symbols(now):
     """Return only US-listed candidates discovered from Schwab NASDAQ/NYSE movers.
 
@@ -218,6 +282,17 @@ def run_cycle():
     program_skipped = []
     program_evaluations = []
     scanner_context_summaries = {}
+    live_quote_timestamp_audits = []
+    print("Tradeboot paper cycle started: " + json.dumps({
+        "event": "paper_cycle_started",
+        "cycle_started_at_utc": started.isoformat(),
+        "process_id": os.getpid(),
+        "thread_name": threading.current_thread().name,
+        "symbols_configured": len(formula_symbols),
+        "active_formula_strategies": len(active),
+        "active_python_strategies": len(active_programs),
+        "tick_max_age_seconds": _TICK_MAX_AGE_SECONDS,
+    }, ensure_ascii=False, sort_keys=True), flush=True)
     if active_programs and not program_symbols:
         scan_diagnostic = dict(get_twelve_data_diagnostics().get(
             "market_movers/stocks",
@@ -407,6 +482,8 @@ def run_cycle():
             # Validate provider timestamps against response-receipt time, not cycle start.
             # History requests may take several seconds before this live quote is fetched.
             quote_received_at = datetime.now(timezone.utc)
+            timestamp_audit = _quote_timestamp_audit(quote, quote_received_at, _TICK_MAX_AGE_SECONDS)
+            live_quote_timestamp_audits.append({"symbol": symbol, "provider": quote_provider, **timestamp_audit})
             age = None
             timestamp_field = None
             live_at = None
@@ -468,8 +545,8 @@ def run_cycle():
                     """, (symbol, live_at.astimezone(timezone.utc), live_price, live_volume, "twelve_data_quotes" if quote_provider == "twelve_data" else "schwab_quotes"))
             except (TypeError, ValueError, OverflowError, OSError) as exc:
                 diagnostic = {"symbol": symbol, "reason": quote_provider + "_live_quote_stale_or_invalid",
-                              "detail": str(exc)[:80]}
-                if "age" in locals() and isinstance(age, (int, float)):
+                              "detail": str(exc)[:80], "timestamp_audit": timestamp_audit}
+                if isinstance(age, (int, float)):
                     diagnostic["age_seconds"] = round(age, 1)
                     diagnostic["max_age_seconds"] = _TICK_MAX_AGE_SECONDS
                 if "timestamp_field" in locals() and timestamp_field:
@@ -683,7 +760,12 @@ def run_cycle():
         "status": scan_diagnostic.get("status"),
         "detail": scan_diagnostic.get("detail"),
         "candidate_count": scan_diagnostic.get("candidate_count", len(program_symbols)),
+        "cycle_started_at_utc": started.isoformat(),
+        "cycle_completed_at_utc": datetime.now(timezone.utc).isoformat(),
+        "cycle_duration_seconds": round((datetime.now(timezone.utc) - started).total_seconds(), 3),
+        "symbols_requested": len(symbols),
         "symbols": program_symbols,
+        "live_quote_timestamp_audits": live_quote_timestamp_audits,
         "schwab_errors": scan_diagnostic.get("schwab_errors", []),
         "yahoo_error": scan_diagnostic.get("yahoo_error"),
         "finviz_error": scan_diagnostic.get("finviz_error"),
@@ -694,6 +776,8 @@ def run_cycle():
             for reason in sorted({item.get("reason", "unknown") for item in program_skipped})
         },
     }
+    scan_log["event"] = "paper_cycle_completed"
+    scan_log["evaluations_total"] = evaluated
     print("Tradeboot scanner diagnostic: " + json.dumps(scan_log, ensure_ascii=False, sort_keys=True), flush=True)
     _state("worker", {"status":"running","last_cycle_at":started.isoformat(),"next_cycle_seconds":_INTERVAL,
                       "symbols":symbols,"formula_symbols":formula_symbols,"program_scan_symbols":program_symbols,
@@ -711,11 +795,20 @@ def run_cycle():
 
 
 def _loop():
-    print("Tradeboot paper-trading loop entered", flush=True)
+    print("Tradeboot paper-trading loop entered: " + json.dumps({
+        "event": "paper_worker_thread_entered",
+        "at_utc": datetime.now(timezone.utc).isoformat(),
+        "process_id": os.getpid(),
+        "thread_name": threading.current_thread().name,
+        "interval_seconds": _INTERVAL,
+    }, sort_keys=True), flush=True)
     while True:
         try:
             run_cycle()
-            print("Tradeboot paper-trading cycle completed", flush=True)
+            print("Tradeboot paper-trading cycle completed: " + json.dumps({
+                "event": "paper_worker_cycle_returned",
+                "at_utc": datetime.now(timezone.utc).isoformat(),
+            }, sort_keys=True), flush=True)
         except Exception as exc:
             print(f"Tradeboot paper-trading cycle failed: {type(exc).__name__}", flush=True)
             traceback.print_exc()
@@ -731,8 +824,16 @@ def _tick_collector_loop():
     """Collect fresh, read-only quotes between strategy cycles so 20-second entry windows are observable."""
     from schwab_integration import get_quotes
 
-    print("Tradeboot live tick collector entered", flush=True)
+    print("Tradeboot live tick collector entered: " + json.dumps({
+        "event": "tick_collector_thread_entered",
+        "at_utc": datetime.now(timezone.utc).isoformat(),
+        "process_id": os.getpid(),
+        "thread_name": threading.current_thread().name,
+        "interval_seconds": _TICK_COLLECTOR_INTERVAL_SECONDS,
+        "max_quote_age_seconds": _TICK_MAX_AGE_SECONDS,
+    }, sort_keys=True), flush=True)
     while True:
+        cycle_started_at = datetime.now(timezone.utc)
         try:
             with _connect() as conn:
                 _init_tables(conn)
@@ -749,6 +850,7 @@ def _tick_collector_loop():
             quote_error = None
             received_quotes = 0
             persisted_ticks = 0
+            symbol_diagnostics = []
             if symbols:
                 status, payload = get_quotes(symbols)
                 quote_status = status
@@ -761,7 +863,12 @@ def _tick_collector_loop():
                     raw = quotes.get(symbol)
                     quote = raw.get("quote", raw) if isinstance(raw, dict) else None
                     if not isinstance(quote, dict):
+                        symbol_diagnostics.append({
+                            "symbol": symbol, "accepted": False, "persisted": False,
+                            "reason": "quote_missing",
+                        })
                         continue
+                    timestamp_audit = _quote_timestamp_audit(quote, now, _TICK_MAX_AGE_SECONDS)
                     try:
                         price = float(quote.get("lastPrice") or quote.get("mark") or 0)
                         stamps = []
@@ -787,6 +894,11 @@ def _tick_collector_loop():
                             except (TypeError, ValueError, OverflowError, OSError):
                                 continue
                         if not stamps or not __import__("math").isfinite(price) or price <= 0:
+                            symbol_diagnostics.append({
+                                "symbol": symbol, "accepted": False, "persisted": False,
+                                "reason": timestamp_audit.get("reason") if not stamps else "invalid_price",
+                                "timestamp_audit": timestamp_audit,
+                            })
                             continue
                         stamp = max(stamps)
                         volume_value = quote.get("totalVolume", quote.get("volume"))
@@ -797,8 +909,16 @@ def _tick_collector_loop():
                         except (TypeError, ValueError):
                             volume = None
                         rows.append((symbol, stamp, price, volume))
-                    except (TypeError, ValueError, OverflowError, OSError):
-                        continue
+                        symbol_diagnostics.append({
+                            "symbol": symbol, "accepted": True, "persisted": False,
+                            "reason": "fresh_quote", "timestamp_audit": timestamp_audit,
+                        })
+                    except (TypeError, ValueError, OverflowError, OSError) as exc:
+                        symbol_diagnostics.append({
+                            "symbol": symbol, "accepted": False, "persisted": False,
+                            "reason": "quote_parse_error", "detail": type(exc).__name__,
+                            "timestamp_audit": timestamp_audit,
+                        })
                 if rows:
                     with _connect() as conn:
                         _init_tables(conn)
@@ -813,6 +933,9 @@ def _tick_collector_loop():
                                     (symbol, stamp, price, volume),
                                 )
                     persisted_ticks = len(rows)
+            persisted_symbols = {row[0] for row in rows}
+            for diagnostic in symbol_diagnostics:
+                diagnostic["persisted"] = diagnostic.get("symbol") in persisted_symbols
             _state("tick_collector", {
                 "status": "ok" if persisted_ticks else ("no_symbols" if not symbols else "no_fresh_quotes"),
                 "last_cycle_at": datetime.now(timezone.utc).isoformat(),
@@ -823,15 +946,21 @@ def _tick_collector_loop():
                 "detail": quote_error if quote_status not in (200, None) else None,
                 "interval_seconds": _TICK_COLLECTOR_INTERVAL_SECONDS,
             })
-            if not persisted_ticks:
-                print("Tradeboot tick collector diagnostic: " + json.dumps({
-                    "status": "no_symbols" if not symbols else "no_fresh_quotes",
-                    "symbols": symbols,
-                    "quotes_received": received_quotes,
-                    "quote_http_status": quote_status,
-                    "detail": quote_error if quote_status not in (200, None) else None,
-                    "max_quote_age_seconds": _TICK_MAX_AGE_SECONDS,
-                }, ensure_ascii=False, sort_keys=True), flush=True)
+            print("Tradeboot tick collector diagnostic: " + json.dumps({
+                "event": "tick_collector_cycle",
+                "cycle_started_at_utc": cycle_started_at.isoformat(),
+                "cycle_completed_at_utc": datetime.now(timezone.utc).isoformat(),
+                "cycle_duration_seconds": round((datetime.now(timezone.utc) - cycle_started_at).total_seconds(), 3),
+                "status": "ok" if persisted_ticks else ("no_symbols" if not symbols else "no_fresh_quotes"),
+                "symbols_requested": len(symbols),
+                "symbols": symbols,
+                "quotes_received": received_quotes,
+                "fresh_ticks_persisted": persisted_ticks,
+                "quote_http_status": quote_status,
+                "detail": quote_error if quote_status not in (200, None) else None,
+                "max_quote_age_seconds": _TICK_MAX_AGE_SECONDS,
+                "per_symbol": symbol_diagnostics,
+            }, ensure_ascii=False, sort_keys=True), flush=True)
         except Exception as exc:
             # Keep the collector isolated: a quote/API issue must not stop the strategy worker.
             try:
@@ -843,7 +972,12 @@ def _tick_collector_loop():
                 })
             except Exception:
                 pass
-            print(f"Tradeboot live tick collector cycle failed: {type(exc).__name__}", flush=True)
+            print("Tradeboot live tick collector cycle failed: " + json.dumps({
+                "event": "tick_collector_cycle_failed",
+                "cycle_started_at_utc": cycle_started_at.isoformat(),
+                "failed_at_utc": datetime.now(timezone.utc).isoformat(),
+                "error_type": type(exc).__name__,
+            }, sort_keys=True), flush=True)
         time.sleep(_TICK_COLLECTOR_INTERVAL_SECONDS)
 
 
@@ -860,3 +994,12 @@ def start_paper_trading_worker():
                 daemon=True,
             )
             _tick_thread.start()
+    print("Tradeboot worker startup diagnostic: " + json.dumps({
+        "event": "worker_threads_started",
+        "at_utc": datetime.now(timezone.utc).isoformat(),
+        "process_id": os.getpid(),
+        "paper_worker_alive": bool(_thread and _thread.is_alive()),
+        "tick_collector_alive": bool(_tick_thread and _tick_thread.is_alive()),
+        "paper_thread_name": _thread.name if _thread else None,
+        "tick_thread_name": _tick_thread.name if _tick_thread else None,
+    }, sort_keys=True), flush=True)
