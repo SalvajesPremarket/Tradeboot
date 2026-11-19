@@ -249,7 +249,9 @@ class MomentumTrader:
             self.last_wait_reason = wait_reason
             # Diagnostic snapshot only: this does not authorize an entry or change
             # the mandatory filters; those still gate the actual entry below.
-            self._scanner_filters(price, ts)
+            # Preserve scanner rejection details even while the candle pattern is
+            # still forming. This is diagnostic only; it does not change entry rules.
+            self.last_reject = self._scanner_filters(price, ts)
             return []
 
         self.last_pattern_state = "entry_pattern_detected"
