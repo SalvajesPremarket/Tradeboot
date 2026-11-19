@@ -31,7 +31,7 @@ REGLAS (largo; el corto es el espejo exacto)
 FILTROS DE SCANNER (se evaluan en el momento de la entrada; TODOS son obligatorios)
     - Precio entre $1 y $20                       [price_min / price_max]
     - Float < 50,000,000 acciones                 [float_max]
-    - Volumen acumulado del dia < 500,000        [volume_max]
+    - Volumen acumulado desde el cierre regular anterior < 1,000,000        [volume_max]
     - Sin filtro de GAP, volumen relativo ni noticias.
     En el corto se aplican los mismos limites de scanner.
     Se apagan todos juntos con CONFIG["use_scanner_filters"] = False.
@@ -39,10 +39,10 @@ FILTROS DE SCANNER (se evaluan en el momento de la entrada; TODOS son obligatori
 COMO LO USA EL TRADEBOOT
     bot   = MomentumTrader("ABCD")                      # un objeto por simbolo
     bot.set_context({"float_shares": 12_500_000})
-                    # El volumen acumulado del dia llega en cada tick y debe ser < 500,000.
+                    # El volumen acumulado desde el cierre regular anterior llega en cada tick y debe ser < 1,000,000.
     bot.seed(velas_cerradas_1m)                         # opcional pero recomendado (200+ velas)
     acciones = bot.on_tick(precio, datetime_con_segundos, volumen_acumulado_del_dia)   # en CADA tick/segundo
-    # volumen_acumulado_del_dia = volumen total de hoy hasta ahora (premarket incluido)
+    # volumen_acumulado_del_dia = volumen desde el cierre regular anterior hasta ahora
 
     Cada accion es un dict:
       {"action": "ENTER" | "EXIT" | "MOVE_STOP", "symbol", "side": "LONG"|"SHORT",
@@ -108,7 +108,7 @@ CONFIG: dict[str, Any] = {
     "use_scanner_filters": True,
     "price_min": 1.0, "price_max": 20.0,
     "float_max": 50_000_000,
-    "volume_max": 500_000,         # volumen acumulado estricto: debe ser menor de 500 mil
+    "volume_max": 1_000_000,         # volumen desde el cierre regular anterior: debe ser menor de 1 millon
 }
 
 # ----------------------------------------------------------------------------
@@ -420,20 +420,20 @@ class MomentumTrader:
             if fl >= cfg["float_max"]:
                 r.append(f"float >= {cfg['float_max']:,}")
 
-        # Se usa el volumen acumulado recibido con el tick (premarket incluido).
+        # Se usa el volumen acumulado desde el cierre regular anterior recibido con el tick.
         # Si falta el dato no podemos verificar el limite de volumen.
         vol = self.day_volume if self.day_volume is not None else ctx.get("volume_today")
         if vol is None:
-            r.append(f"sin volumen de hoy para verificar < {cfg['volume_max']:,}")
+            r.append(f"sin volumen desde el cierre anterior para verificar < {cfg['volume_max']:,}")
         else:
             try:
                 vol = float(vol)
             except (TypeError, ValueError):
                 vol = None
             if vol is None or vol < 0:
-                r.append("volumen de hoy invalido")
+                r.append("volumen desde el cierre anterior invalido")
             else:
-                m["volume_today"] = int(vol)
+                m["volume_since_previous_close"] = int(vol)
                 if vol >= cfg["volume_max"]:
                     r.append(f"volumen {vol:,.0f} >= {cfg['volume_max']:,}")
         return r
