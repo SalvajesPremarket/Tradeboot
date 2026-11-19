@@ -131,71 +131,6 @@ def _country_list():
     return _FALLBACK_COUNTRIES
 
 
-def _get_finviz_us_gainers():
-    """Best-effort free US-only screener fallback; discovery only, never live quotes."""
-    from html.parser import HTMLParser
-
-    class _ScreenerParser(HTMLParser):
-        def __init__(self):
-            super().__init__(convert_charrefs=True)
-            self.rows = []
-            self.row = None
-            self.cell = None
-            self.in_cell = False
-
-        def handle_starttag(self, tag, attrs):
-            attrs = dict(attrs)
-            if tag.lower() == "tr" and attrs.get("data-ticker"):
-                self.row = {"symbol": attrs.get("data-ticker", "").strip().upper(), "cells": []}
-            elif self.row is not None and tag.lower() == "td":
-                self.cell = []
-                self.in_cell = True
-
-        def handle_data(self, data):
-            if self.row is not None and self.in_cell and self.cell is not None:
-                self.cell.append(data)
-
-        def handle_endtag(self, tag):
-            if tag.lower() == "td" and self.row is not None and self.in_cell:
-                self.row["cells"].append(" ".join(" ".join(self.cell or []).split()))
-                self.cell = None
-                self.in_cell = False
-            elif tag.lower() == "tr" and self.row is not None:
-                self.rows.append(self.row)
-                self.row = None
-
-    url = "https://finviz.com/screener.ashx?" + urlencode({
-        "v": "111", "f": "geo_usa,sh_price_o1,sh_price_u20", "o": "-change",
-    })
-    request = Request(url, headers={
-        "Accept": "text/html",
-        "User-Agent": "Mozilla/5.0 (compatible; Tradeboot/1.0; US stock scanner)",
-    }, method="GET")
-    with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-        html = response.read().decode("utf-8", errors="replace")
-    parser = _ScreenerParser()
-    parser.feed(html)
-    candidates = []
-    for row in parser.rows:
-        symbol = row.get("symbol", "")
-        cells = row.get("cells") or []
-        if not _valid_symbol(symbol) or len(cells) < 10:
-            continue
-        try:
-            price = float(cells[8].replace("$", "").replace(",", ""))
-            change = float(cells[9].replace("%", "").replace(",", ""))
-        except (TypeError, ValueError):
-            continue
-        if not 1.0 <= price <= 20.0:
-            continue
-        candidates.append({
-            "symbol": symbol, "country": "United States",
-            "exchange": "", "price": price, "percent_change": change,
-            "provider": "finviz",
-        })
-    return sorted(candidates, key=lambda item: item["percent_change"], reverse=True)
-
-
 def _get_nasdaq_us_candidates():
     """Free US-listed equity discovery via Nasdaq's public screener API.
 
@@ -361,17 +296,6 @@ def get_global_candidates(now=None, limit=None):
                 except Exception as exc:
                     yahoo_error = type(exc).__name__
 
-            finviz_error = None
-            if not candidates:
-                try:
-                    candidates = _get_finviz_us_gainers()
-                    if candidates:
-                        scanner_provider = "finviz"
-                except (HTTPError, URLError, TimeoutError, OSError, ValueError, UnicodeError) as exc:
-                    finviz_error = type(exc).__name__
-                except Exception as exc:
-                    finviz_error = type(exc).__name__
-
             nasdaq_errors = []
             if not candidates:
                 candidates, nasdaq_errors = _get_nasdaq_us_candidates()
@@ -441,7 +365,6 @@ def get_global_candidates(now=None, limit=None):
                         "twelve_data_status": "skipped_plan_basic",
                         "schwab_errors": failures[:2],
                         "yahoo_error": yahoo_error,
-                        "finviz_error": finviz_error,
                     }
                 elif candidates:
                     seed_fallback = scanner_provider == "us_seed_fallback"
@@ -451,14 +374,12 @@ def get_global_candidates(now=None, limit=None):
                         "detail": (
                             "validated_us_seed_quotes_after_all_scanner_outages" if seed_fallback else
                             ("us_day_gainers_fallback" if scanner_provider == "yahoo_finance" else
-                             ("finviz_us_screener_fallback" if scanner_provider == "finviz" else
-                              ("nasdaq_public_screener_fallback" if scanner_provider == "nasdaq_screener" else "us_exchange_movers")))
+                             ("nasdaq_public_screener_fallback" if scanner_provider == "nasdaq_screener" else "us_exchange_movers"))
                         ),
                         "candidate_count": len(candidates),
                         "twelve_data_status": "skipped_plan_basic",
                         "schwab_errors": failures[:2],
                         "yahoo_error": yahoo_error,
-                        "finviz_error": finviz_error,
                         "nasdaq_errors": nasdaq_errors,
                     }
                 else:
@@ -470,7 +391,6 @@ def get_global_candidates(now=None, limit=None):
                         "twelve_data_status": "skipped_plan_basic",
                         "schwab_errors": failures[:2],
                         "yahoo_error": yahoo_error,
-                        "finviz_error": finviz_error,
                         "nasdaq_errors": nasdaq_errors,
                     }
                 _DIAGNOSTICS["market_movers/stocks"] = diag
@@ -744,89 +664,6 @@ def _get_yahoo_float(symbol):
         return None, "yahoo_" + type(exc).__name__
 
 
-def _get_finviz_float(symbol):
-    """Read only the explicitly labeled Float field from Finviz's public quote page.
-
-    This is a no-paid-plan fallback. It never substitutes shares outstanding or
-    market capitalization for float, and parsing failures simply return unavailable.
-    """
-    import re
-    from html.parser import HTMLParser
-
-    class _TableParser(HTMLParser):
-        def __init__(self):
-            super().__init__(convert_charrefs=True)
-            self.in_td = False
-            self.in_tr = False
-            self.cell_parts = []
-            self.row = []
-            self.rows = []
-
-        def handle_starttag(self, tag, attrs):
-            if tag.lower() == "tr":
-                self.in_tr = True
-                self.row = []
-            elif tag.lower() == "td" and self.in_tr:
-                self.in_td = True
-                self.cell_parts = []
-
-        def handle_data(self, data):
-            if self.in_td:
-                self.cell_parts.append(data)
-
-        def handle_endtag(self, tag):
-            tag = tag.lower()
-            if tag == "td" and self.in_td:
-                self.row.append(" ".join("".join(self.cell_parts).split()))
-                self.in_td = False
-                self.cell_parts = []
-            elif tag == "tr" and self.in_tr:
-                if self.row:
-                    self.rows.append(self.row)
-                self.row = []
-                self.in_tr = False
-
-    symbol = str(symbol or "").strip().upper()
-    if not symbol or not _valid_symbol(symbol):
-        return None, "finviz_invalid_symbol"
-    request = Request(
-        "https://finviz.com/quote.ashx?t=" + urlencode({"": symbol})[1:],
-        headers={
-            "Accept": "text/html,application/xhtml+xml",
-            "User-Agent": "Mozilla/5.0 (compatible; Tradeboot/1.0; read-only)",
-        },
-        method="GET",
-    )
-    try:
-        with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-            html = response.read(2_000_000).decode("utf-8", errors="replace")
-        parser = _TableParser()
-        parser.feed(html)
-        for row in parser.rows:
-            for index, cell in enumerate(row[:-1]):
-                # Finviz labels this statistic "Shs Float" on its quote table.
-                # Accept only explicit float labels; never use "Shs Outstand".
-                label = cell.strip().lower().rstrip(":")
-                if label not in {"float", "shs float", "shares float"}:
-                    continue
-                value = row[index + 1].strip().replace(",", "").upper()
-                match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KMB]?)", value)
-                if not match:
-                    continue
-                amount = float(match.group(1))
-                multiplier = {"": 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}[match.group(2)]
-                shares = int(amount * multiplier)
-                if shares > 0:
-                    return shares, None
-        return None, "finviz_float_field_unavailable"
-    except HTTPError as exc:
-        return None, "finviz_http_" + str(exc.code)
-    except (URLError, TimeoutError, OSError, UnicodeError):
-        return None, "finviz_unavailable"
-    except Exception as exc:
-        return None, "finviz_" + type(exc).__name__
-
-
 def _get_free_float(symbol, now=None):
     """Resolve actual float shares from free/read-only sources; never estimate."""
     symbol = str(symbol or "").strip().upper()
@@ -880,17 +717,6 @@ def _get_free_float(symbol, now=None):
 
     attempts.append(yahoo_error or "yahoo_float_unavailable")
 
-    shares, finviz_error = _get_finviz_float(symbol)
-    if shares:
-        result = {
-            "float_shares": shares, "provider": "finviz",
-            "effective_date": None, "status": "ok",
-        }
-        with _CACHE_LOCK:
-            _CACHE[cache_key] = (current + 21600, result)
-            _DIAGNOSTICS["float"] = {"status": "ok", "provider": "finviz"}
-        return result
-    attempts.append(finviz_error or "finviz_float_unavailable")
 
     result = {
         "float_shares": None, "provider": None,
