@@ -19,6 +19,8 @@ class TwelveDataIntegrationTests(unittest.TestCase):
         td._SYMBOL_META.clear()
         td._DIAGNOSTICS.clear()
         td._LAST_STATS_REQUEST = 0.0
+        td._MASSIVE_BATCH_CHECKED.clear()
+        td._MASSIVE_BATCH_LAST_REQUEST = 0.0
 
     def tearDown(self):
         td._API_KEY = self.old_key
@@ -29,6 +31,8 @@ class TwelveDataIntegrationTests(unittest.TestCase):
         td._COUNTRY_ROWS.clear()
         td._SYMBOL_META.clear()
         td._DIAGNOSTICS.clear()
+        td._MASSIVE_BATCH_CHECKED.clear()
+        td._MASSIVE_BATCH_LAST_REQUEST = 0.0
 
     def _disable_public_fallbacks(self):
         """Make outage tests deterministic without making real HTTP requests."""
@@ -103,6 +107,30 @@ class TwelveDataIntegrationTests(unittest.TestCase):
     def test_float_parser_does_not_mistake_shares_outstanding_for_float(self):
         self.assertIsNone(td._find_float_shares({"shares_outstanding": 1000000}))
         self.assertEqual(td._find_float_shares({"statistics": {"float_shares": "12500000"}}), 12500000)
+
+    def test_massive_float_prefetch_batches_symbols_and_caches_verified_values(self):
+        from datetime import date
+        with patch.dict("os.environ", {"MASSIVE_API_KEY": "massive-test-key"}, clear=False):
+            with patch.object(td, "_provider_json", return_value=(200, {"results": [
+                {"ticker": "AAA", "free_float": 1234567, "effective_date": date.today().isoformat()},
+            ]})) as provider:
+                result = td.prefetch_free_floats(["AAA", "BBB", "AAA"])
+        self.assertEqual(result, {"status": "ok", "requested": 2, "valid": 1})
+        request_url = provider.call_args.args[0]
+        self.assertIn("ticker.any_of=AAA%2CBBB", request_url)
+        self.assertEqual(td._get_free_float("AAA")["float_shares"], 1234567)
+        self.assertEqual(td._get_free_float("AAA")["provider"], "massive")
+
+    def test_massive_batch_miss_skips_individual_massive_request_and_fails_closed(self):
+        with patch.dict("os.environ", {"MASSIVE_API_KEY": "massive-test-key"}, clear=False):
+            with patch.object(td, "_provider_json", return_value=(200, {"results": []})) as provider:
+                td.prefetch_free_floats(["NOFLOAT"])
+            with patch.object(td, "_get_yahoo_float", return_value=(None, "yahoo_float_unavailable")):
+                result = td._get_free_float("NOFLOAT")
+        self.assertIsNone(result["float_shares"])
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["attempts"], ["massive_no_valid_float", "yahoo_float_unavailable"])
+        self.assertEqual(provider.call_count, 1)
 
     def test_float_lookup_returns_unavailable_when_authorized_sources_have_no_float(self):
         with patch.dict("os.environ", {"MASSIVE_API_KEY": "", "POLYGON_API_KEY": ""}, clear=False):

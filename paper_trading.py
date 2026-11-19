@@ -412,6 +412,14 @@ def run_cycle():
         from zoneinfo import ZoneInfo
         eastern = ZoneInfo("America/New_York")
         now_minute = started.replace(second=0, microsecond=0)
+        # One Massive request covers this cycle's candidates; per-symbol context
+        # resolution then reads the shared cache and only falls back to Yahoo.
+        from twelve_data_integration import prefetch_free_floats
+        float_batch_diagnostic = prefetch_free_floats(program_symbols)
+        print("Tradeboot Massive float batch: " + json.dumps({
+            "event": "massive_float_batch",
+            **float_batch_diagnostic,
+        }, ensure_ascii=False, sort_keys=True), flush=True)
         for symbol in program_symbols:
             symbol_meta = get_symbol_metadata(symbol)
             country = str(symbol_meta.get("country", "")).strip().lower()
