@@ -591,7 +591,8 @@ def run_cycle():
             # Use prior regular-session close as volume baseline; feed today's ticks to candle logic.
             local_now = quote_received_at.astimezone(eastern)
             day_start = datetime.combine(local_now.date(), datetime.min.time(), tzinfo=eastern)
-            close_cutoff = day_start  # Always use the last session close before today's date.\n            with _connect() as conn:
+            close_cutoff = day_start  # Always use the last session close before today's date.
+            with _connect() as conn:
                 _init_tables(conn)
                 baseline = conn.execute("""
                     SELECT tick_at,day_volume FROM tradeboot_market_ticks
