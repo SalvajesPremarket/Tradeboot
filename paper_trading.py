@@ -807,7 +807,6 @@ def run_cycle():
     scan_sources = {
         "schwab": "schwab_us_market_movers",
         "yahoo_finance": "yahoo_us_day_gainers",
-        "finviz": "finviz_us_screener",
         "nasdaq_screener": "nasdaq_public_screener",
         "last_known_us_candidates": "last_known_us_candidates",
         "us_seed_fallback": "us_seed_fallback_live_quotes",
@@ -827,7 +826,6 @@ def run_cycle():
         "live_quote_timestamp_audits": live_quote_timestamp_audits,
         "schwab_errors": scan_diagnostic.get("schwab_errors", []),
         "yahoo_error": scan_diagnostic.get("yahoo_error"),
-        "finviz_error": scan_diagnostic.get("finviz_error"),
         "nasdaq_errors": scan_diagnostic.get("nasdaq_errors", []),
         "evaluations": evaluated,
         "skip_reason_counts": {
