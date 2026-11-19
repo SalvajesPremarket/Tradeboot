@@ -7,7 +7,7 @@ import os
 import threading
 import time
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time as dtime
 
 from strategy_store import _connect, list_strategies, get_general_capital
 from strategy_engine import evaluate_formula, StrategyFormulaError
@@ -601,7 +601,7 @@ def run_cycle():
                     SELECT tick_at,day_volume FROM tradeboot_market_ticks
                     WHERE symbol=%s AND tick_at >= %s AND tick_at <= %s
                       AND (tick_at AT TIME ZONE 'America/New_York')::time
-                          BETWEEN TIME '15:30:00' AND TIME '16:00:00'
+                          BETWEEN TIME '15:59:00' AND TIME '16:00:00'
                     ORDER BY tick_at DESC LIMIT 1
                 """, (symbol, started - timedelta(days=14), close_cutoff.astimezone(timezone.utc))).fetchone()
                 if baseline:
