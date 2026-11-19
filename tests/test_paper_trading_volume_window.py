@@ -1,32 +1,55 @@
-from datetime import datetime, timezone
+from datetime import date, datetime
 import unittest
+from zoneinfo import ZoneInfo
 
-from paper_trading import _volume_window_ticks
+from paper_trading import _volume_since_previous_close
 
 
 class PriorCloseVolumeWindowTests(unittest.TestCase):
-    def test_accumulates_after_hours_and_premarket_across_midnight_reset(self):
-        baseline = datetime(2026, 11, 18, 21, 0, tzinfo=timezone.utc)
-        day_start = datetime(2026, 11, 19, 5, 0, tzinfo=timezone.utc)
+    def setUp(self):
+        self.eastern = ZoneInfo("America/New_York")
+        self.previous_session = date(2026, 11, 18)
+        self.window_end = datetime(2026, 11, 19, 4, 45, tzinfo=self.eastern)
+
+    def row(self, stamp, volume):
+        return {"_stamp": stamp, "volume": volume}
+
+    def test_sums_after_hours_and_premarket_and_excludes_window_boundaries(self):
         rows = [
-            (baseline, 5.00, 2_000_000),
-            (datetime(2026, 11, 18, 21, 10, tzinfo=timezone.utc), 5.01, 2_000_300),
-            (datetime(2026, 11, 19, 4, 59, tzinfo=timezone.utc), 5.02, 2_001_000),
-            (day_start, 5.03, 100),
-            (datetime(2026, 11, 19, 10, 0, tzinfo=timezone.utc), 5.04, 150),
+            self.row(datetime(2026, 11, 18, 15, 59, tzinfo=self.eastern), 9000),
+            self.row(datetime(2026, 11, 18, 16, 0, tzinfo=self.eastern), 100),
+            self.row(datetime(2026, 11, 18, 19, 59, tzinfo=self.eastern), 50),
+            self.row(datetime(2026, 11, 19, 4, 0, tzinfo=self.eastern), 200),
+            self.row(datetime(2026, 11, 19, 4, 44, tzinfo=self.eastern), 30),
+            self.row(datetime(2026, 11, 19, 4, 45, tzinfo=self.eastern), 700),
         ]
-        ticks, total, error = _volume_window_ticks(rows, baseline, day_start)
+        total, error = _volume_since_previous_close(rows, self.previous_session, self.window_end, self.eastern)
         self.assertIsNone(error)
-        self.assertEqual(total, 1_150)
-        self.assertEqual([tick['day_volume'] for tick in ticks], [1_100, 1_150])
+        self.assertEqual(total, 380)
 
-    def test_missing_close_baseline_fails_closed(self):
-        now = datetime(2026, 11, 19, 12, 0, tzinfo=timezone.utc)
-        ticks, total, error = _volume_window_ticks([], None, now)
-        self.assertEqual(ticks, [])
+    def test_zero_volume_is_valid_when_extended_hours_bars_exist(self):
+        rows = [self.row(datetime(2026, 11, 18, 16, 0, tzinfo=self.eastern), 0)]
+        total, error = _volume_since_previous_close(rows, self.previous_session, self.window_end, self.eastern)
+        self.assertIsNone(error)
+        self.assertEqual(total, 0)
+
+    def test_missing_extended_hours_history_fails_closed(self):
+        total, error = _volume_since_previous_close([], self.previous_session, self.window_end, self.eastern)
         self.assertIsNone(total)
-        self.assertEqual(error, 'previous_close_baseline_missing')
+        self.assertEqual(error, "previous_close_intraday_history_missing")
+
+    def test_missing_previous_session_fails_closed(self):
+        rows = [self.row(datetime(2026, 11, 19, 4, 0, tzinfo=self.eastern), 10)]
+        total, error = _volume_since_previous_close(rows, None, self.window_end, self.eastern)
+        self.assertIsNone(total)
+        self.assertEqual(error, "previous_close_intraday_history_missing")
+
+    def test_invalid_volume_fails_closed(self):
+        rows = [self.row(datetime(2026, 11, 18, 16, 0, tzinfo=self.eastern), float("nan"))]
+        total, error = _volume_since_previous_close(rows, self.previous_session, self.window_end, self.eastern)
+        self.assertIsNone(total)
+        self.assertEqual(error, "previous_close_intraday_volume_invalid")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

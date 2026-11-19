@@ -111,36 +111,37 @@ def _quote_timestamp_audit(quote, received_at, max_age_seconds=_TICK_MAX_AGE_SEC
     }
 
 
-def _volume_window_ticks(rows, baseline_at, day_start):
-    """Convert cumulative quote-volume snapshots into volume since prior 16:00 ET close."""
+def _volume_since_previous_close(minute_rows, previous_session_date, window_end, eastern):
+    """Sum completed Schwab 1-minute bars from the prior 16:00 ET close, including extended hours."""
     import math
-    if not rows or baseline_at is None or rows[0][0] != baseline_at:
-        return [], None, "previous_close_baseline_missing"
-    try:
-        previous = float(rows[0][2])
-    except (TypeError, ValueError, OverflowError):
-        return [], None, "previous_close_volume_missing"
-    if not math.isfinite(previous) or previous < 0:
-        return [], None, "previous_close_volume_invalid"
-    cumulative = 0.0
-    current_day_ticks = []
-    for tick_at, price, raw_volume in rows[1:]:
-        if raw_volume is not None:
-            try:
-                current = float(raw_volume)
-            except (TypeError, ValueError, OverflowError):
-                current = None
-            if current is not None and math.isfinite(current) and current >= 0:
-                increment = current - previous if current >= previous else current
-                cumulative += max(0.0, increment)
-                previous = current
-        if tick_at >= day_start:
-            current_day_ticks.append({
-                "price": float(price),
-                "timestamp": tick_at.astimezone(timezone.utc).isoformat(),
-                "day_volume": cumulative,
-            })
-    return current_day_ticks, cumulative, None
+    from datetime import time as dtime
+
+    if not minute_rows or previous_session_date is None:
+        return None, "previous_close_intraday_history_missing"
+    close_at = datetime.combine(previous_session_date, dtime(16, 0), tzinfo=eastern)
+    end_at = window_end.astimezone(eastern)
+    if end_at <= close_at:
+        return None, "previous_close_volume_window_invalid"
+
+    volumes = []
+    for row in minute_rows:
+        stamp = row.get("_stamp") if isinstance(row, dict) else None
+        if not isinstance(stamp, datetime):
+            continue
+        stamp = stamp.astimezone(eastern)
+        if not (close_at <= stamp < end_at):
+            continue
+        try:
+            volume = float(row.get("volume"))
+        except (TypeError, ValueError, OverflowError):
+            return None, "previous_close_intraday_volume_invalid"
+        if not math.isfinite(volume) or volume < 0:
+            return None, "previous_close_intraday_volume_invalid"
+        volumes.append(volume)
+
+    if not volumes:
+        return None, "previous_close_intraday_history_missing"
+    return sum(volumes), None
 
 
 def _program_scan_symbols(now):
@@ -588,49 +589,41 @@ def run_cycle():
                 program_skipped.append(diagnostic)
                 continue
 
-            # Use prior regular-session close as volume baseline; feed today's ticks to candle logic.
+            # Sum Schwab's extended-hours 1-minute bars from the prior regular close.
+            # This works for newly discovered premarket movers even when no 15:59 tick
+            # was stored for that symbol on the previous session.
             local_now = quote_received_at.astimezone(eastern)
             day_start = datetime.combine(local_now.date(), datetime.min.time(), tzinfo=eastern)
-            close_cutoff = day_start  # Always use the last session close before today's date.
-            with _connect() as conn:
-                _init_tables(conn)
-                baseline = conn.execute("""
-                    SELECT tick_at,day_volume FROM tradeboot_market_ticks
-                    WHERE symbol=%s AND tick_at >= %s AND tick_at <= %s
-                      AND (tick_at AT TIME ZONE 'America/New_York')::time
-                          BETWEEN TIME '15:59:00' AND TIME '16:00:00'
-                    ORDER BY tick_at DESC LIMIT 1
-                """, (symbol, started - timedelta(days=14), close_cutoff.astimezone(timezone.utc))).fetchone()
-                if baseline:
-                    baseline_at = baseline[0]
-                    volume_rows = conn.execute("""
-                        SELECT tick_at,price,day_volume FROM tradeboot_market_ticks
-                        WHERE symbol=%s AND tick_at >= %s AND tick_at <= %s
-                        ORDER BY tick_at ASC LIMIT 30000
-                    """, (symbol, baseline_at, quote_received_at + timedelta(seconds=10))).fetchall()
-                else:
-                    baseline_at = None
-                    volume_rows = conn.execute("""
-                        SELECT tick_at,price,day_volume FROM tradeboot_market_ticks
-                        WHERE symbol=%s AND tick_at >= %s AND tick_at <= %s
-                        ORDER BY tick_at DESC LIMIT 5000
-                    """, (symbol, day_start.astimezone(timezone.utc), quote_received_at + timedelta(seconds=10))).fetchall()
-                    volume_rows.reverse()
-
-            if baseline_at is not None and len(volume_rows) >= 30000:
-                ticks = [{"price": float(row[1]), "timestamp": row[0].astimezone(timezone.utc).isoformat(),
-                          "day_volume": None} for row in volume_rows if row[0] >= day_start.astimezone(timezone.utc)]
-                cumulative_volume = None
-                volume_window_error = "volume_window_history_truncated"
-            elif baseline_at is not None:
-                ticks, cumulative_volume, volume_window_error = _volume_window_ticks(
-                    volume_rows, baseline_at, day_start.astimezone(timezone.utc)
+            previous_session_date = daily_rows[-1]["_stamp"].astimezone(eastern).date() if daily_rows else None
+            volume_window_start = (
+                datetime.combine(previous_session_date, datetime.strptime("16:00", "%H:%M").time(), tzinfo=eastern)
+                if previous_session_date else None
+            )
+            volume_window_end = now_minute.astimezone(eastern)
+            if history_provider == "schwab":
+                cumulative_volume, volume_window_error = _volume_since_previous_close(
+                    minute_rows, previous_session_date, now_minute, eastern
                 )
             else:
-                ticks = [{"price": float(row[1]), "timestamp": row[0].astimezone(timezone.utc).isoformat(),
-                          "day_volume": None} for row in volume_rows]
+                # Twelve Data fallback history is not guaranteed to include extended hours.
+                # Never use it to claim a complete prior-close volume total.
                 cumulative_volume = None
-                volume_window_error = "previous_close_baseline_missing"
+                volume_window_error = "schwab_extended_hours_history_required"
+            with _connect() as conn:
+                _init_tables(conn)
+                tick_rows = conn.execute("""
+                    SELECT tick_at,price FROM tradeboot_market_ticks
+                    WHERE symbol=%s AND tick_at >= %s AND tick_at <= %s
+                    ORDER BY tick_at DESC LIMIT 5000
+                """, (symbol, day_start.astimezone(timezone.utc), quote_received_at + timedelta(seconds=10))).fetchall()
+            tick_rows.reverse()
+            ticks = [{
+                "price": float(row[1]),
+                "timestamp": row[0].astimezone(timezone.utc).isoformat(),
+                # The verified volume total is supplied through context below. Do not
+                # pass Schwab's resettable daily counter as if it covered after-hours.
+                "day_volume": None,
+            } for row in tick_rows]
 
             if not ticks:
                 program_skipped.append({"symbol": symbol, "reason": "no_persisted_live_ticks"})
@@ -652,15 +645,16 @@ def run_cycle():
                 "news_provider": context_diag.get("news_provider"),
                 "news_count": context_diag.get("news_count", 0),
                 "news_latest_at": context_diag.get("news_latest_at"),
-                "volume_window_start_utc": baseline_at.isoformat() if baseline_at else None,
+                "volume_window_start_utc": volume_window_start.astimezone(timezone.utc).isoformat() if volume_window_start else None,
                 "volume_since_previous_close": round(cumulative_volume, 2) if cumulative_volume is not None else None,
+                "volume_window_end_utc": volume_window_end.astimezone(timezone.utc).isoformat(),
                 "volume_window_error": volume_window_error,
             }
             context = {
                 "prev_close": daily_candles[-1]["close"] if daily_candles else None,
                 "avg_volume_30d": (sum(daily_volumes) / len(daily_volumes)) if daily_volumes else None,
                 "volume_today": cumulative_volume,
-                "volume_window_start": baseline_at.isoformat() if baseline_at else None,
+                "volume_window_start": volume_window_start.astimezone(timezone.utc).isoformat() if volume_window_start else None,
                 "float_shares": scanner_context.get("float_shares"),
                 "news": scanner_context.get("news", []),
             }
