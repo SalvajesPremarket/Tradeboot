@@ -19,6 +19,8 @@ class TwelveDataIntegrationTests(unittest.TestCase):
         td._SYMBOL_META.clear()
         td._DIAGNOSTICS.clear()
         td._LAST_STATS_REQUEST = 0.0
+        td._MASSIVE_BATCH_CHECKED.clear()
+        td._MASSIVE_BATCH_LAST_REQUEST = 0.0
 
     def tearDown(self):
         td._API_KEY = self.old_key
@@ -29,6 +31,8 @@ class TwelveDataIntegrationTests(unittest.TestCase):
         td._COUNTRY_ROWS.clear()
         td._SYMBOL_META.clear()
         td._DIAGNOSTICS.clear()
+        td._MASSIVE_BATCH_CHECKED.clear()
+        td._MASSIVE_BATCH_LAST_REQUEST = 0.0
 
     def _disable_public_fallbacks(self):
         """Make outage tests deterministic without making real HTTP requests."""
