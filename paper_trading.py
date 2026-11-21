@@ -198,6 +198,9 @@ def _init_tables(conn):
     conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS time_in_force TEXT")
     conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS extended_hours BOOLEAN")
     conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS limit_price DOUBLE PRECISION")
+    conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS target1_price DOUBLE PRECISION")
+    conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS target1_done BOOLEAN NOT NULL DEFAULT FALSE")
+    conn.execute("ALTER TABLE tradeboot_paper_trades ADD COLUMN IF NOT EXISTS realized_pnl_partial DOUBLE PRECISION NOT NULL DEFAULT 0")
     conn.execute("CREATE INDEX IF NOT EXISTS tradeboot_paper_trades_status_idx ON tradeboot_paper_trades(status, strategy_id, symbol)")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS tradeboot_paper_events (
@@ -262,7 +265,8 @@ def get_paper_status():
             """).fetchall()
             counts = conn.execute("""
                 SELECT COUNT(*) FILTER (WHERE t.status='OPEN'), COUNT(*) FILTER (WHERE t.status='CLOSED'),
-                       COALESCE(SUM(t.pnl_usd) FILTER (WHERE t.status='CLOSED'),0),
+                       COALESCE(SUM(t.pnl_usd) FILTER (WHERE t.status='CLOSED'),0)
+                         + COALESCE(SUM(t.realized_pnl_partial) FILTER (WHERE t.status='OPEN'),0),
                        COALESCE(SUM(CASE WHEN t.status='OPEN' AND mark.price IS NOT NULL
                          THEN (CASE WHEN t.side='SHORT' THEN t.entry_price-mark.price ELSE mark.price-t.entry_price END)*t.quantity
                          ELSE 0 END),0),
@@ -677,13 +681,33 @@ def run_cycle():
                                         "reason": "unsupported_reviewed_strategy"})
                         continue
                     module, _class_name, kind = spec
+                    if strategy["name"] == "Calculador Minor" and (history_provider != "schwab" or quote_provider != "schwab"):
+                        program_skipped.append({"symbol": symbol, "strategy_id": strategy["id"],
+                                        "reason": "calculador_minor_requires_schwab_history_and_quote"})
+                        continue
                     payload = {
                         "strategyName": strategy["name"], "formula": strategy["formula"],
                         "symbol": symbol, "capital": capital * float(strategy.get("allocationPercent", 10)) / 100,
                         "candles": seed_candles, "ticks": ticks, "context": context,
                     }
-                    if kind == "pullback":
+                    if kind in ("pullback", "calculator_minor"):
                         payload["daily_candles"] = daily_candles
+                    if kind == "calculator_minor":
+                        with _connect() as conn:
+                            _init_tables(conn)
+                            open_position_row = conn.execute("""
+                                SELECT entry_price,stop_price,take_price,side,entry_at,target1_price,target1_done
+                                FROM tradeboot_paper_trades
+                                WHERE strategy_id=%s AND symbol=%s AND status='OPEN'
+                                ORDER BY id DESC LIMIT 1
+                            """, (strategy["id"], symbol)).fetchone()
+                        if open_position_row:
+                            payload["open_position"] = {
+                                "entry_price": open_position_row[0], "stop_price": open_position_row[1],
+                                "take_price": open_position_row[2], "side": open_position_row[3],
+                                "entry_at": open_position_row[4], "target1_price": open_position_row[5],
+                                "target1_done": open_position_row[6],
+                            }
                     result = simulate_program(payload)
                     result_diagnostics = result.get("diagnostics", {})
                     program_evaluations.append({
@@ -702,7 +726,7 @@ def run_cycle():
                         with conn.transaction():
                             for action in result.get("actions", []):
                                 event_at = action.get("event_at")
-                                if not event_at or action.get("action") not in ("ENTER", "EXIT", "MOVE_STOP"):
+                                if not event_at or action.get("action") not in ("ENTER", "EXIT", "MOVE_STOP", "PARTIAL_EXIT"):
                                     continue
                                 try:
                                     event_time = datetime.fromisoformat(event_at.replace("Z", "+00:00"))
@@ -723,7 +747,7 @@ def run_cycle():
                                 if not isinstance(price, (int, float)) or not __import__("math").isfinite(price) or price <= 0:
                                     continue
                                 open_row = conn.execute("""
-                                    SELECT id,entry_price,quantity,allocated_usd,stop_price,side
+                                    SELECT id,entry_price,quantity,allocated_usd,stop_price,side,realized_pnl_partial
                                     FROM tradeboot_paper_trades
                                     WHERE strategy_id=%s AND symbol=%s AND status='OPEN'
                                     ORDER BY id DESC LIMIT 1 FOR UPDATE
@@ -752,18 +776,24 @@ def run_cycle():
                                     stop = action.get("stop")
                                     if not isinstance(stop, (int, float)) or stop <= 0:
                                         stop = price * (1 - _STOP_PCT / 100 if side == "LONG" else 1 + _STOP_PCT / 100)
-                                    take = price * (1 + _TAKE_PCT / 100 if side == "LONG" else 1 - _TAKE_PCT / 100)
+                                    target1 = action.get("target1")
+                                    target2 = action.get("target2")
+                                    take = target2 if isinstance(target2, (int, float)) and target2 > 0 else price * (1 + _TAKE_PCT / 100 if side == "LONG" else 1 - _TAKE_PCT / 100)
+                                    if not isinstance(target1, (int, float)) or target1 <= 0:
+                                        target1 = take
                                     conn.execute("""
                                         INSERT INTO tradeboot_paper_trades
                                         (strategy_id,strategy_name,symbol,status,entry_price,quantity,allocated_usd,
-                                         stop_price,take_price,entry_at,last_quote_at,side,order_type,time_in_force,extended_hours,limit_price)
-                                        VALUES (%s,%s,%s,'OPEN',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                                         stop_price,take_price,entry_at,last_quote_at,side,order_type,time_in_force,extended_hours,limit_price,
+                                         target1_price,target1_done,realized_pnl_partial)
+                                        VALUES (%s,%s,%s,'OPEN',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,FALSE,0)
                                     """, (strategy["id"],strategy["name"],symbol,price,budget/price,budget,
                                           stop,take,event_time,event_time,side,
                                           "LIMIT" if is_jean_long else None,
                                           "DAY" if is_jean_long else None,
                                           True if is_jean_long else None,
-                                          round(price * 1.01, 2) if is_jean_long else None))
+                                          round(price * 1.01, 2) if is_jean_long else None,
+                                          target1))
                                 elif action["action"] == "MOVE_STOP" and open_row:
                                     old_stop = float(open_row[4])
                                     new_stop = action.get("stop")
@@ -784,6 +814,32 @@ def run_cycle():
                                     new_actions += 1
                                     conn.execute("UPDATE tradeboot_paper_trades SET stop_price=%s,last_quote_at=%s WHERE id=%s",
                                                  (new_stop,event_time,open_row[0]))
+                                elif action["action"] == "PARTIAL_EXIT" and open_row:
+                                    trade_id, entry, quantity, allocated, old_stop, open_side, partial_realized = open_row
+                                    try:
+                                        fraction = float(action.get("quantity_pct", 0.5))
+                                    except (TypeError, ValueError):
+                                        fraction = 0
+                                    if not 0 < fraction < 1 or quantity <= 0:
+                                        continue
+                                    inserted = conn.execute("""
+                                        INSERT INTO tradeboot_paper_events(strategy_id,symbol,action,event_at,reason)
+                                        VALUES (%s,%s,%s,%s,%s)
+                                        ON CONFLICT(strategy_id,symbol,action,event_at) DO NOTHING
+                                        RETURNING id
+                                    """, (strategy["id"], symbol, action["action"], event_time, str(action.get("reason", ""))[:160])).fetchone()
+                                    if not inserted:
+                                        continue
+                                    closed_quantity = quantity * fraction
+                                    partial_pnl = _paper_pnl(open_side, entry, price, closed_quantity)
+                                    conn.execute("""
+                                        UPDATE tradeboot_paper_trades
+                                        SET quantity=%s, allocated_usd=%s,
+                                            realized_pnl_partial=COALESCE(realized_pnl_partial,0)+%s,
+                                            target1_done=TRUE,last_quote_at=%s
+                                        WHERE id=%s
+                                    """, (quantity - closed_quantity, allocated * (1 - fraction), partial_pnl, event_time, trade_id))
+                                    new_actions += 1
                                 elif action["action"] == "EXIT" and open_row:
                                     inserted = conn.execute("""
                                         INSERT INTO tradeboot_paper_events(strategy_id,symbol,action,event_at,reason)
@@ -794,8 +850,8 @@ def run_cycle():
                                     if not inserted:
                                         continue
                                     new_actions += 1
-                                    trade_id, entry, quantity, allocated, old_stop, open_side = open_row
-                                    pnl = _paper_pnl(open_side, entry, price, quantity)
+                                    trade_id, entry, quantity, allocated, old_stop, open_side, partial_realized = open_row
+                                    pnl = float(partial_realized or 0) + _paper_pnl(open_side, entry, price, quantity)
                                     conn.execute("""
                                         UPDATE tradeboot_paper_trades SET status='CLOSED',exit_price=%s,pnl_usd=%s,
                                         exit_at=%s,exit_reason=%s,last_quote_at=%s WHERE id=%s
