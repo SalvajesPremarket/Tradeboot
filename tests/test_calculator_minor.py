@@ -49,6 +49,23 @@ class CalculatorMinorTests(unittest.TestCase):
         self.assertFalse(result["real_orders_enabled"])
         self.assertIsInstance(result["actions"], list)
 
+    def test_target_one_closes_half_and_target_two_closes_remainder(self):
+        candles = self._bars()
+        last = datetime.fromisoformat(candles[-1]["timestamp"].replace("Z", "+00:00"))
+        ticks = [
+            {"price": 11.0, "timestamp": (last + timedelta(minutes=1, seconds=1)).isoformat()},
+            {"price": 12.0, "timestamp": (last + timedelta(minutes=2, seconds=1)).isoformat()},
+        ]
+        open_position = {
+            "side": "LONG", "entry_price": 10.0, "stop_price": 9.0,
+            "target1_price": 11.0, "take_price": 12.0,
+            "target1_done": False, "entry_at": (last - timedelta(minutes=1)).isoformat(),
+        }
+        result = CalculatorMinorTrader("TEST").simulate(candles, self._bars(90), ticks, open_position)
+        self.assertEqual([item["action"] for item in result["actions"]], ["PARTIAL_EXIT", "EXIT"])
+        self.assertEqual(result["actions"][0]["quantity_pct"], 0.5)
+        self.assertIn("Objetivo 2", result["actions"][1]["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()
