@@ -297,6 +297,9 @@ class CalculatorMinorTrader:
             raise ValueError("Historial insuficiente: se requieren 30 velas cerradas de 1 minuto.")
         latest = _stamp(ticks[-1]["timestamp"])
         direction = analyze_direction(minute)
+        if latest - direction["as_of"] > timedelta(minutes=5):
+            raise ValueError("Las velas cerradas de 1 minuto están atrasadas más de 5 minutos.")
+        signal_ready_at = direction["as_of"] + timedelta(minutes=1)
         score = direction["score"]
         bias = "LONG" if score >= 22 else ("SHORT" if score <= -22 else "WAIT")
         risk_atr = direction["atr"]
@@ -323,6 +326,8 @@ class CalculatorMinorTrader:
                 "target1_done": bool(open_position.get("target1_done")),
                 "entry_at": _stamp(open_position["entry_at"]),
             }
+        pending = None
+        closed_this_cycle = False
         for tick in ticks:
             stamp = _stamp(tick["timestamp"])
             price = float(tick["price"])
@@ -334,42 +339,64 @@ class CalculatorMinorTrader:
                 stopped = price <= pos["stop"] if pos["side"] == "LONG" else price >= pos["stop"]
                 target1_hit = price >= pos["target1"] if pos["side"] == "LONG" else price <= pos["target1"]
                 target2_hit = price >= pos["target2"] if pos["side"] == "LONG" else price <= pos["target2"]
-                if stopped:
+                if stopped or opposite:
                     actions.append({"action": "EXIT", "side": pos["side"], "price": price,
-                                    "reason": "Calculador Minor · Stop Loss", "event_at": stamp.isoformat()})
+                                    "reason": "Calculador Minor · Stop Loss" if stopped else "Calculador Minor · cambio confirmado de dirección",
+                                    "event_at": stamp.isoformat()})
                     self.position = None
-                elif opposite:
-                    actions.append({"action": "EXIT", "side": pos["side"], "price": price,
-                                    "reason": "Calculador Minor · cambio confirmado de dirección", "event_at": stamp.isoformat()})
-                    self.position = None
+                    closed_this_cycle = True
                 elif target2_hit:
+                    if not pos["target1_done"]:
+                        actions.append({"action": "PARTIAL_EXIT", "side": pos["side"], "price": price,
+                                        "quantity_pct": 0.5, "reason": "Calculador Minor · Objetivo 1 (1R), cerrar 50%",
+                                        "event_at": stamp.isoformat()})
+                        pos["target1_done"] = True
                     actions.append({"action": "EXIT", "side": pos["side"], "price": price,
                                     "reason": "Calculador Minor · Objetivo 2 (2R)", "event_at": stamp.isoformat()})
                     self.position = None
+                    closed_this_cycle = True
                 elif target1_hit and not pos["target1_done"]:
                     actions.append({"action": "PARTIAL_EXIT", "side": pos["side"], "price": price,
                                     "quantity_pct": 0.5, "reason": "Calculador Minor · Objetivo 1 (1R), cerrar 50%",
                                     "event_at": stamp.isoformat()})
                     pos["target1_done"] = True
                 continue
-            if bias == "WAIT" or risk is None:
+
+            minute_start = stamp.replace(second=0, microsecond=0)
+            if pending is None:
+                pending = {"start": minute_start, "open": price, "high": price,
+                           "low": price, "close": price, "last_at": stamp}
                 continue
-            side = "LONG" if bias == "LONG" else "SHORT"
-            entry = direction["trigger_high"] + 0.01 if side == "LONG" else direction["trigger_low"] - 0.01
-            crossed = price >= entry if side == "LONG" else price <= entry
-            if not crossed:
+            if minute_start == pending["start"]:
+                pending["high"] = max(pending["high"], price)
+                pending["low"] = min(pending["low"], price)
+                pending["close"] = price
+                pending["last_at"] = stamp
                 continue
-            stop = entry - risk if side == "LONG" else entry + risk
-            target1 = entry + risk if side == "LONG" else entry - risk
-            target2 = entry + 2 * risk if side == "LONG" else entry - 2 * risk
-            actions.append({
-                "action": "ENTER", "side": side, "price": price, "stop": stop,
-                "target1": target1, "target2": target2,
-                "reason": "Calculador Minor · ruptura confirmada de cinco velas; sesgo %s (%s/100)" % (bias, score),
-                "event_at": stamp.isoformat(),
-            })
-            self.position = {"side": side, "entry": price, "stop": stop, "target1": target1,
-                             "target2": target2, "target1_done": False, "entry_at": stamp}
+            if minute_start < pending["start"]:
+                continue
+
+            # Confirm entries only after a complete live 1-minute candle closes.
+            if (not closed_this_cycle and bias != "WAIT" and risk is not None
+                    and pending["start"] >= signal_ready_at):
+                side = "LONG" if bias == "LONG" else "SHORT"
+                threshold = direction["trigger_high"] if side == "LONG" else direction["trigger_low"]
+                confirmed = pending["close"] > threshold if side == "LONG" else pending["close"] < threshold
+                if confirmed:
+                    entry = price
+                    stop = entry - risk if side == "LONG" else entry + risk
+                    target1 = entry + risk if side == "LONG" else entry - risk
+                    target2 = entry + 2 * risk if side == "LONG" else entry - 2 * risk
+                    actions.append({
+                        "action": "ENTER", "side": side, "price": entry, "stop": stop,
+                        "target1": target1, "target2": target2,
+                        "reason": "Calculador Minor · cierre confirmado de vela de 1 minuto tras ruptura de cinco velas; sesgo %s (%s/100)" % (bias, score),
+                        "event_at": stamp.isoformat(),
+                    })
+                    self.position = {"side": side, "entry": entry, "stop": stop, "target1": target1,
+                                     "target2": target2, "target1_done": False, "entry_at": stamp}
+            pending = {"start": minute_start, "open": price, "high": price,
+                       "low": price, "close": price, "last_at": stamp}
         return {
             "ok": True, "strategy": STRATEGY_NAME, "mode": "simulation_only",
             "symbol": self.symbol, "actions": actions,
