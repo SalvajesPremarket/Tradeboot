@@ -24,10 +24,13 @@ class StrategyProgramEngineTests(unittest.TestCase):
             "news": [{"published_at": (now - timedelta(minutes=10)).isoformat(),
                       "headline": "Company reports quarterly earnings"}],
         }
+        if kind == "calculator_minor":
+            candles = [{**row, "timestamp": (now - timedelta(minutes=220-i)).isoformat()}
+                       for i, row in enumerate(candles)]
         payload = {"strategyName": name, "formula": inspect.getsource(module),
                    "symbol": "SIM", "capital": 10000, "candles": candles,
                    "ticks": ticks, "context": context}
-        if kind == "pullback":
+        if kind in ("pullback", "calculator_minor"):
             daily = []
             for i in range(400):
                 stamp = now - timedelta(days=399-i)
