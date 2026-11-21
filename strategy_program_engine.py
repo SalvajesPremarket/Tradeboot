@@ -13,10 +13,12 @@ import math
 from datetime import datetime, timezone
 
 import momentum_tramos
+import calculator_minor
 from strategy_programs import jean_long, jean_short, pullback_long, pullback_short
 
 _REGISTRY = {
     "Momentum Tramos": (momentum_tramos, "MomentumTrader", "momentum"),
+    "Calculador Minor": (calculator_minor, "CalculatorMinorTrader", "calculator_minor"),
     "JeanLong": (jean_long, "MomentumTrader", "momentum"),
     "JeanShort": (jean_short, "MomentumTrader", "momentum"),
     "PULLBACK LONG EMA50 o 200 D W": (pullback_long, "PullbackLongTrader", "pullback"),
@@ -197,6 +199,15 @@ def simulate_program(payload):
             "last_pattern_state": getattr(bot, "last_pattern_state", None),
             "last_wait_reason": getattr(bot, "last_wait_reason", None),
         }
+    elif kind == "calculator_minor":
+        daily = _bars(payload.get("daily_candles", []), "daily_candles", volume_required=True, max_rows=2000)
+        if len(daily) < 3:
+            raise ValueError("Calculador Minor necesita al menos 3 velas diarias completas para ATR y niveles.")
+        bot = getattr(module, class_name)(symbol)
+        result = bot.simulate(candles, daily, clean_ticks, open_position=payload.get("open_position"))
+        actions = result.get("actions", [])
+        position = result.get("open_simulated_position")
+        diagnostics = result.get("diagnostics", {})
     else:
         daily = _bars(payload.get("daily_candles", []), "daily_candles", volume_required=True, max_rows=2000)
         if len(daily) < 60:
