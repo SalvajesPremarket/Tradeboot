@@ -26,10 +26,14 @@ def _connect():
 def _canonical_program_source(name, strategy_type):
     """Return the checked-in source for canonical reviewed programs shown in the UI."""
     normalized_name = "".join(str(name or "").casefold().split())
-    if normalized_name == "jeanlong" and strategy_type == "python_program":
+    if strategy_type == "python_program":
         import inspect
-        from strategy_programs import jean_long
-        return inspect.getsource(jean_long)
+        if normalized_name == "jeanlong":
+            from strategy_programs import jean_long
+            return inspect.getsource(jean_long)
+        if normalized_name == "calculadorminor":
+            import calculator_minor
+            return inspect.getsource(calculator_minor)
     return None
 
 
@@ -61,6 +65,26 @@ def list_strategies():
                      AND formula IS DISTINCT FROM %s""",
                 (canonical_jean_long, datetime.now(timezone.utc), "jeanlong",
                  "python_program", canonical_jean_long),
+            )
+        canonical_calculator_minor = _canonical_program_source("Calculador Minor", "python_program")
+        if canonical_calculator_minor is not None:
+            now = datetime.now(timezone.utc)
+            conn.execute(
+                """INSERT INTO tradeboot_strategies
+                   (id, name, formula, strategy_type, enabled, created_at, updated_at)
+                   VALUES (%s, %s, %s, %s, FALSE, %s, %s)
+                   ON CONFLICT (id) DO NOTHING""",
+                ("calculador-minor-v1", "Calculador Minor", canonical_calculator_minor,
+                 "python_program", now, now),
+            )
+            conn.execute(
+                """UPDATE tradeboot_strategies
+                   SET formula = %s, updated_at = %s
+                   WHERE lower(replace(trim(name), ' ', '')) = %s
+                     AND strategy_type = %s
+                     AND formula IS DISTINCT FROM %s""",
+                (canonical_calculator_minor, now, "calculadorminor",
+                 "python_program", canonical_calculator_minor),
             )
         rows = conn.execute(
             "SELECT id, name, formula, enabled, created_at, strategy_type FROM tradeboot_strategies ORDER BY created_at, id"
