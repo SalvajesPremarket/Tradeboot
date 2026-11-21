@@ -177,21 +177,31 @@ def calculate_market_levels(minute_rows, daily_rows, price, now):
     """Port of the TradeScanner multi-timeframe Bollinger/EMA reference model."""
     minute = _valid_bars(minute_rows)
     daily = _valid_bars(daily_rows)
+    local_now = now.astimezone(ET)
+    today = local_now.date()
+    today_bars = [x for x in minute if x["timestamp"].astimezone(ET).date() == today]
+    daily_for_levels = list(daily)
+    if today_bars:
+        daily_for_levels.append({
+            "timestamp": today_bars[0]["timestamp"],
+            "open": today_bars[0]["open"],
+            "high": max(x["high"] for x in today_bars),
+            "low": min(x["low"] for x in today_bars),
+            "close": today_bars[-1]["close"],
+            "volume": sum(x["volume"] for x in today_bars),
+        })
     frames = []
     for minutes in TIMEFRAMES_MINUTES:
         bars = _aggregate_minutes(minute, minutes, now)
         frames.append(_timeframe_reference(bars, price, str(minutes) + "m"))
-    frames.append(_timeframe_reference(daily, price, "1d"))
-    frames.append(_timeframe_reference(_aggregate_calendar(daily, "week"), price, "1w"))
-    frames.append(_timeframe_reference(_aggregate_calendar(daily, "month"), price, "1mo"))
+    frames.append(_timeframe_reference(daily_for_levels, price, "1d"))
+    frames.append(_timeframe_reference(_aggregate_calendar(daily_for_levels, "week"), price, "1w"))
+    frames.append(_timeframe_reference(_aggregate_calendar(daily_for_levels, "month"), price, "1mo"))
     over = [x["reference"] for x in frames if x["status"] == "ok" and x["state"] == "sobrecompra"]
     under = [x["reference"] for x in frames if x["status"] == "ok" and x["state"] == "sobreventa"]
     avg_over = sum(over) / len(over) if over else None
     avg_under = sum(under) / len(under) if under else None
 
-    local_now = now.astimezone(ET)
-    today = local_now.date()
-    today_bars = [x for x in minute if x["timestamp"].astimezone(ET).date() == today]
     current_range = (max(x["high"] for x in today_bars) - min(x["low"] for x in today_bars)) if today_bars else None
     completed_ranges = [x["high"] - x["low"] for x in daily[-2:]]
     atr_inputs = completed_ranges + ([current_range] if current_range is not None else [])
