@@ -250,7 +250,7 @@ function renderStrategies(){
  $('strategy-count').textContent=strategies.length+' estrategia'+(strategies.length===1?'':'s');
  const list=$('strategy-list');
  if(!strategies.length){list.innerHTML='<div class="empty-strategies">Todavía no has creado estrategias. Usa el formulario para añadir la primera.</div>';return}
- const reviewedNames=['JeanLong','JeanShort','PULLBACK LONG EMA50 o 200 D W','PULLBACK SHORT EMA50 o 200 D W'];
+ const reviewedNames=['JeanLong','JeanShort','Calculador Minor','PULLBACK LONG EMA50 o 200 D W','PULLBACK SHORT EMA50 o 200 D W'];
  list.innerHTML=strategies.map(s=>{
   const program=(s.strategyType||'formula')==='python_program',reviewed=program&&reviewedNames.includes(s.name);
   const title=reviewed?'MOTOR REVISADO · SOLO SIMULACIÓN':program?'PYTHON · MOTOR NO DISPONIBLE':s.enabled?'ACTIVADA · CONFIGURACIÓN':'DESACTIVADA';
